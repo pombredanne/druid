@@ -1642,12 +1642,89 @@ public class TopNQueryRunnerTest
             )
         )
     );
-    HashMap<String, Object> context = new HashMap<String, Object>();
-    TestHelper.assertExpectedResults(expectedResults, runner.run(query, context));
+    TestHelper.assertExpectedResults(expectedResults, runner.run(query, new HashMap<String, Object>()));
   }
 
   @Test
-  public void testTopNWithNullOrEmptyDimExtractionFn()
+  public void testTopNWithNullProducingDimExtractionFn()
+  {
+    final DimExtractionFn nullStringDimExtraction = new DimExtractionFn()
+    {
+      @Override
+      public byte[] getCacheKey()
+      {
+        return new byte[]{(byte) 0xFF};
+      }
+
+      @Override
+      public String apply(String dimValue)
+      {
+        return dimValue.equals("total_market") ? null : dimValue;
+      }
+
+      @Override
+      public boolean preservesOrdering()
+      {
+        return false;
+      }
+    };
+
+    final TopNQuery query = new TopNQueryBuilder()
+        .dataSource(QueryRunnerTestHelper.dataSource)
+        .granularity(QueryRunnerTestHelper.allGran)
+        .metric("rows")
+        .threshold(4)
+        .intervals(QueryRunnerTestHelper.firstToThird)
+        .aggregators(QueryRunnerTestHelper.commonAggregators)
+        .postAggregators(Arrays.<PostAggregator>asList(QueryRunnerTestHelper.addRowsIndexConstant))
+        .dimension(
+            new ExtractionDimensionSpec(marketDimension, marketDimension, nullStringDimExtraction)
+        )
+        .build();
+
+
+    List<Result<TopNResultValue>> expectedResults = Arrays.asList(
+        new Result<>(
+            new DateTime("2011-04-01T00:00:00.000Z"),
+            new TopNResultValue(
+                Arrays.<Map<String, Object>>asList(
+                    ImmutableMap.<String, Object>of(
+                        marketDimension, "spot",
+                        "rows", 18L,
+                        "index", 2231.8768157958984D,
+                        "addRowsIndexConstant", 2250.8768157958984D,
+                        "uniques", QueryRunnerTestHelper.UNIQUES_9
+                    ),
+                    new LinkedHashMap<String, Object>(){{
+                      put(marketDimension, null);
+                      put("rows", 4L);
+                      put("index", 5351.814697265625D);
+                      put("addRowsIndexConstant", 5356.814697265625D);
+                      put("uniques", QueryRunnerTestHelper.UNIQUES_2);
+                    }},
+                    ImmutableMap.<String, Object>of(
+                        marketDimension, "upfront",
+                        "rows", 4L,
+                        "index", 4875.669677734375D,
+                        "addRowsIndexConstant", 4880.669677734375D,
+                        "uniques", QueryRunnerTestHelper.UNIQUES_2
+                    )
+                )
+            )
+        )
+    );
+
+    TestHelper.assertExpectedResults(expectedResults, runner.run(query, Maps.newHashMap()));
+
+  }
+
+  @Test
+  /**
+   * This test exists only to show what the current behavior is and not necessarily to define that this is
+   * correct behavior.  In fact, the behavior when returning the empty string from a DimExtractionFn is, by
+   * contract, undefined, so this can do anything.
+   */
+  public void testTopNWithEmptyStringProducingDimExtractionFn()
   {
     final DimExtractionFn emptyStringDimExtraction = new DimExtractionFn()
     {
@@ -1670,47 +1747,17 @@ public class TopNQueryRunnerTest
       }
     };
 
-    final DimExtractionFn nullStringDimExtraction = new DimExtractionFn()
-    {
-      @Override
-      public byte[] getCacheKey()
-      {
-        return new byte[]{(byte) 0xFF};
-      }
-
-      @Override
-      public String apply(String dimValue)
-      {
-        return dimValue.equals("total_market") ? "" : dimValue;
-      }
-
-      @Override
-      public boolean preservesOrdering()
-      {
-        return false;
-      }
-    };
-
-    final TopNQueryBuilder builder = new TopNQueryBuilder()
+    final TopNQuery query = new TopNQueryBuilder()
         .dataSource(QueryRunnerTestHelper.dataSource)
         .granularity(QueryRunnerTestHelper.allGran)
         .metric("rows")
         .threshold(4)
         .intervals(QueryRunnerTestHelper.firstToThird)
         .aggregators(QueryRunnerTestHelper.commonAggregators)
-        .postAggregators(Arrays.<PostAggregator>asList(QueryRunnerTestHelper.addRowsIndexConstant));
-
-    TopNQuery emptyStringQuery = builder.dimension(
-        new ExtractionDimensionSpec(
-            marketDimension, marketDimension, emptyStringDimExtraction
-        )
-    ).build();
-
-    TopNQuery nullQuery = builder.dimension(
-        new ExtractionDimensionSpec(
-            marketDimension, marketDimension, nullStringDimExtraction
-        )
-    ).build();
+        .postAggregators(Arrays.<PostAggregator>asList(QueryRunnerTestHelper.addRowsIndexConstant))
+        .dimension(
+        new ExtractionDimensionSpec(marketDimension, marketDimension, emptyStringDimExtraction))
+        .build();
 
 
     List<Result<TopNResultValue>> expectedResults = Arrays.asList(
@@ -1725,14 +1772,12 @@ public class TopNQueryRunnerTest
                         "addRowsIndexConstant", 2250.8768157958984D,
                         "uniques", QueryRunnerTestHelper.UNIQUES_9
                     ),
-                    new LinkedHashMap(){{
-                      put(marketDimension, null);
-                      putAll(ImmutableMap.of(
-                                 "rows", 4L,
-                                 "index", 5351.814697265625D,
-                                 "addRowsIndexConstant", 5356.814697265625D,
-                                 "uniques", QueryRunnerTestHelper.UNIQUES_2
-                             ));
+                    new LinkedHashMap<String, Object>(){{
+                      put(marketDimension, "");
+                      put("rows", 4L);
+                      put("index", 5351.814697265625D);
+                      put("addRowsIndexConstant", 5356.814697265625D);
+                      put("uniques", QueryRunnerTestHelper.UNIQUES_2);
                     }},
                     ImmutableMap.<String, Object>of(
                         marketDimension, "upfront",
@@ -1746,9 +1791,7 @@ public class TopNQueryRunnerTest
         )
     );
 
-    TestHelper.assertExpectedResults(expectedResults, runner.run(emptyStringQuery, Maps.newHashMap()));
-    TestHelper.assertExpectedResults(expectedResults, runner.run(nullQuery, Maps.newHashMap()));
-
+    TestHelper.assertExpectedResults(expectedResults, runner.run(query, Maps.newHashMap()));
   }
 
   @Test
