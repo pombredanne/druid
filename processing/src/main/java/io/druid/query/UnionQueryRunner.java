@@ -1,28 +1,24 @@
 /*
  * Druid - a distributed column store.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
- *
- * This file Copyright (C) 2014 N3TWORK, Inc. and contributed to the Druid project
- * under the Druid Corporate Contributor License Agreement.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.query;
 
 import com.google.common.base.Function;
-import com.google.common.collect.Iterables;
+import com.google.common.collect.Lists;
 import com.metamx.common.guava.Sequence;
 import com.metamx.common.guava.Sequences;
 
@@ -30,35 +26,34 @@ import java.util.Map;
 
 public class UnionQueryRunner<T> implements QueryRunner<T>
 {
-  private final Iterable<QueryRunner> baseRunners;
+  private final QueryRunner<T> baseRunner;
   private final QueryToolChest<T, Query<T>> toolChest;
 
   public UnionQueryRunner(
-      Iterable<QueryRunner> baseRunners,
+      QueryRunner<T> baseRunner,
       QueryToolChest<T, Query<T>> toolChest
   )
   {
-    this.baseRunners = baseRunners;
+    this.baseRunner = baseRunner;
     this.toolChest = toolChest;
   }
 
   @Override
   public Sequence<T> run(final Query<T> query, final Map<String, Object> responseContext)
   {
-    if (Iterables.size(baseRunners) == 1) {
-      return Iterables.getOnlyElement(baseRunners).run(query, responseContext);
-    } else {
+    DataSource dataSource = query.getDataSource();
+    if (dataSource instanceof UnionDataSource) {
       return toolChest.mergeSequencesUnordered(
           Sequences.simple(
-              Iterables.transform(
-                  baseRunners,
-                  new Function<QueryRunner, Sequence<T>>()
+              Lists.transform(
+                  ((UnionDataSource) dataSource).getDataSources(),
+                  new Function<DataSource, Sequence<T>>()
                   {
                     @Override
-                    public Sequence<T> apply(QueryRunner singleRunner)
+                    public Sequence<T> apply(DataSource singleSource)
                     {
-                      return singleRunner.run(
-                          query,
+                      return baseRunner.run(
+                          query.withDataSource(singleSource),
                           responseContext
                       );
                     }
@@ -66,6 +61,8 @@ public class UnionQueryRunner<T> implements QueryRunner<T>
               )
           )
       );
+    } else {
+      return baseRunner.run(query, responseContext);
     }
   }
 

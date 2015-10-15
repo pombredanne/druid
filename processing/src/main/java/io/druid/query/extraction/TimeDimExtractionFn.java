@@ -1,27 +1,25 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.query.extraction;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.google.common.base.Charsets;
+import com.google.common.base.Preconditions;
 import com.ibm.icu.text.SimpleDateFormat;
 import com.metamx.common.StringUtils;
 
@@ -31,7 +29,7 @@ import java.util.Date;
 
 /**
  */
-public class TimeDimExtractionFn implements DimExtractionFn
+public class TimeDimExtractionFn extends DimExtractionFn
 {
   private static final byte CACHE_TYPE_ID = 0x0;
 
@@ -46,6 +44,9 @@ public class TimeDimExtractionFn implements DimExtractionFn
       @JsonProperty("resultFormat") String resultFormat
   )
   {
+    Preconditions.checkNotNull(timeFormat, "timeFormat must not be null");
+    Preconditions.checkNotNull(resultFormat, "resultFormat must not be null");
+
     this.timeFormat = timeFormat;
     this.timeFormatter = new SimpleDateFormat(timeFormat);
     this.timeFormatter.setLenient(true);
@@ -96,11 +97,47 @@ public class TimeDimExtractionFn implements DimExtractionFn
   }
 
   @Override
+  public ExtractionType getExtractionType()
+  {
+    return ExtractionType.MANY_TO_ONE;
+  }
+
+  @Override
   public String toString()
   {
     return "TimeDimExtractionFn{" +
            "timeFormat='" + timeFormat + '\'' +
            ", resultFormat='" + resultFormat + '\'' +
            '}';
+  }
+
+  @Override
+  public boolean equals(Object o)
+  {
+    if (this == o) {
+      return true;
+    }
+    if (o == null || getClass() != o.getClass()) {
+      return false;
+    }
+
+    TimeDimExtractionFn that = (TimeDimExtractionFn) o;
+
+    if (!resultFormat.equals(that.resultFormat)) {
+      return false;
+    }
+    if (!timeFormat.equals(that.timeFormat)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  @Override
+  public int hashCode()
+  {
+    int result = timeFormat.hashCode();
+    result = 31 * result + resultFormat.hashCode();
+    return result;
   }
 }

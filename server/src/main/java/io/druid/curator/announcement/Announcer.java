@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.curator.announcement;
@@ -34,6 +32,8 @@ import io.druid.curator.ShutdownNowIgnoringExecutorService;
 import io.druid.curator.cache.PathChildrenCacheFactory;
 import io.druid.curator.cache.SimplePathChildrenCacheFactory;
 import org.apache.curator.framework.CuratorFramework;
+import org.apache.curator.framework.api.transaction.CuratorTransaction;
+import org.apache.curator.framework.api.transaction.CuratorTransactionFinal;
 import org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.curator.framework.recipes.cache.PathChildrenCache;
 import org.apache.curator.framework.recipes.cache.PathChildrenCacheEvent;
@@ -123,12 +123,21 @@ public class Announcer
         }
       }
 
-      for (String parent : parentsIBuilt) {
+      if (!parentsIBuilt.isEmpty()) {
+        CuratorTransaction transaction = curator.inTransaction();
+        for (String parent : parentsIBuilt) {
+          try {
+            transaction = transaction.delete().forPath(parent).and();
+          }
+          catch (Exception e) {
+            log.info(e, "Unable to delete parent[%s], boooo.", parent);
+          }
+        }
         try {
-          curator.delete().forPath(parent);
+          ((CuratorTransactionFinal) transaction).commit();
         }
         catch (Exception e) {
-          log.info(e, "Unable to delete parent[%s], boooo.", parent);
+          log.info(e, "Unable to commit transaction. Please feed the hamsters");
         }
       }
     }
@@ -318,7 +327,7 @@ public class Announcer
   /**
    * Unannounces an announcement created at path.  Note that if all announcements get removed, the Announcer
    * will continue to have ZK watches on paths because clearing them out is a source of ugly race conditions.
-   * 
+   *
    * If you need to completely clear all the state of what is being watched and announced, stop() the Announcer.
    *
    * @param path the path to unannounce
@@ -337,7 +346,7 @@ public class Announcer
     }
 
     try {
-      curator.delete().guaranteed().forPath(path);
+      curator.inTransaction().delete().forPath(path).and().commit();
     }
     catch (KeeperException.NoNodeException e) {
       log.info("node[%s] didn't exist anyway...", path);

@@ -1,32 +1,33 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.testing.clients;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.api.client.util.Charsets;
+import com.fasterxml.jackson.jaxrs.smile.SmileMediaTypes;
+import com.google.common.base.Charsets;
 import com.google.common.base.Throwables;
 import com.metamx.common.ISE;
 import com.metamx.http.client.HttpClient;
+import com.metamx.http.client.Request;
 import com.metamx.http.client.response.StatusResponseHandler;
 import com.metamx.http.client.response.StatusResponseHolder;
+import org.jboss.netty.handler.codec.http.HttpMethod;
 import org.jboss.netty.handler.codec.http.HttpResponseStatus;
 
 import javax.ws.rs.core.MediaType;
@@ -44,14 +45,22 @@ public class EventReceiverFirehoseTestClient
   private final ObjectMapper jsonMapper;
   private final HttpClient httpClient;
   private final String chatID;
+  private final ObjectMapper smileMapper;
 
-  public EventReceiverFirehoseTestClient(String host, String chatID, ObjectMapper jsonMapper, HttpClient httpClient)
+  public EventReceiverFirehoseTestClient(
+      String host,
+      String chatID,
+      ObjectMapper jsonMapper,
+      HttpClient httpClient,
+      ObjectMapper smileMapper
+  )
   {
     this.host = host;
     this.jsonMapper = jsonMapper;
     this.responseHandler = new StatusResponseHandler(Charsets.UTF_8);
     this.httpClient = httpClient;
     this.chatID = chatID;
+    this.smileMapper = smileMapper;
   }
 
   private String getURL()
@@ -70,16 +79,19 @@ public class EventReceiverFirehoseTestClient
    *
    * @return
    */
-  public int postEvents(Collection<Map<String, Object>> events)
+  public int postEvents(Collection<Map<String, Object>> events, ObjectMapper objectMapper, String mediaType)
   {
     try {
-      StatusResponseHolder response = httpClient.post(new URL(getURL()))
-                                                .setContent(
-                                                    MediaType.APPLICATION_JSON,
-                                                    this.jsonMapper.writeValueAsBytes(events)
-                                                )
-                                                .go(responseHandler)
-                                                .get();
+      StatusResponseHolder response = httpClient.go(
+          new Request(
+              HttpMethod.POST, new URL(getURL())
+          ).setContent(
+              mediaType,
+              objectMapper.writeValueAsBytes(events)
+          ),
+          responseHandler
+      ).get();
+
       if (!response.getStatus().equals(HttpResponseStatus.OK)) {
         throw new ISE(
             "Error while posting events to url[%s] status[%s] content[%s]",
@@ -88,7 +100,7 @@ public class EventReceiverFirehoseTestClient
             response.getContent()
         );
       }
-      Map<String, Integer> responseData = jsonMapper.readValue(
+      Map<String, Integer> responseData = objectMapper.readValue(
           response.getContent(), new TypeReference<Map<String, Integer>>()
           {
           }
@@ -100,18 +112,32 @@ public class EventReceiverFirehoseTestClient
     }
   }
 
+  /**
+   * Reads each events from file and post them to the indexing service.
+   * Uses both smileMapper and jsonMapper to send events alternately.
+   *
+   * @param file location of file to post events from
+   *
+   * @return number of events sent to the indexing service
+   */
   public int postEventsFromFile(String file)
   {
-    try {
-      BufferedReader reader = new BufferedReader(
-          new InputStreamReader(
-              EventReceiverFirehoseTestClient.class.getResourceAsStream(
-                  file
-              )
-          )
-      );
+    try (
+        BufferedReader reader = new BufferedReader(
+            new InputStreamReader(
+                EventReceiverFirehoseTestClient.class.getResourceAsStream(
+                    file
+                )
+            )
+        );
+    ) {
+
       String s;
       Collection<Map<String, Object>> events = new ArrayList<Map<String, Object>>();
+      // Test sending events using both jsonMapper and smileMapper.
+      // sends events one by one using both jsonMapper and smileMapper.
+      int totalEventsPosted = 0;
+      int expectedEventsPosted = 0;
       while ((s = reader.readLine()) != null) {
         events.add(
             (Map<String, Object>) this.jsonMapper.readValue(
@@ -120,12 +146,20 @@ public class EventReceiverFirehoseTestClient
                 }
             )
         );
+        ObjectMapper mapper = (totalEventsPosted % 2 == 0) ? jsonMapper : smileMapper;
+        String mediaType = (totalEventsPosted % 2 == 0)
+                           ? MediaType.APPLICATION_JSON
+                           : SmileMediaTypes.APPLICATION_JACKSON_SMILE;
+        totalEventsPosted += postEvents(events, mapper, mediaType);
+        ;
+        expectedEventsPosted += events.size();
+        events = new ArrayList<>();
       }
-      int eventsPosted = postEvents(events);
-      if (eventsPosted != events.size()) {
-        throw new ISE("All events not posted, expected : %d actual : %d", events.size(), eventsPosted);
+
+      if (totalEventsPosted != expectedEventsPosted) {
+        throw new ISE("All events not posted, expected : %d actual : %d", events.size(), totalEventsPosted);
       }
-      return eventsPosted;
+      return totalEventsPosted;
     }
     catch (Exception e) {
       throw Throwables.propagate(e);

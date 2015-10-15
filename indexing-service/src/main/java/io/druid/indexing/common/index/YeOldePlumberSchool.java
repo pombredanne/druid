@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.indexing.common.index;
@@ -24,18 +22,19 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonTypeName;
 import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
-import com.metamx.common.Granularity;
 import com.metamx.common.logger.Logger;
+import io.druid.data.input.Committer;
 import io.druid.data.input.InputRow;
 import io.druid.query.Query;
 import io.druid.query.QueryRunner;
 import io.druid.segment.IndexIO;
-import io.druid.segment.IndexMaker;
+import io.druid.segment.IndexMerger;
 import io.druid.segment.QueryableIndex;
 import io.druid.segment.SegmentUtils;
 import io.druid.segment.incremental.IndexSizeExceededException;
@@ -102,23 +101,29 @@ public class YeOldePlumberSchool implements PlumberSchool
     return new Plumber()
     {
       @Override
-      public void startJob()
+      public Object startJob()
       {
-
+        return null;
       }
 
       @Override
-      public int add(InputRow row) throws IndexSizeExceededException
+      public int add(InputRow row, Supplier<Committer> committerSupplier) throws IndexSizeExceededException
       {
         Sink sink = getSink(row.getTimestampFromEpoch());
         if (sink == null) {
           return -1;
         }
 
-        return sink.add(row);
+        final int numRows = sink.add(row);
+
+        if (!sink.canAppendRow()) {
+          persist(committerSupplier.get());
+        }
+
+        return numRows;
       }
 
-      public Sink getSink(long timestamp)
+      private Sink getSink(long timestamp)
       {
         if (theSink.getInterval().contains(timestamp)) {
           return theSink;
@@ -134,10 +139,10 @@ public class YeOldePlumberSchool implements PlumberSchool
       }
 
       @Override
-      public void persist(Runnable commitRunnable)
+      public void persist(Committer committer)
       {
         spillIfSwappable();
-        commitRunnable.run();
+        committer.run();
       }
 
       @Override
@@ -161,7 +166,7 @@ public class YeOldePlumberSchool implements PlumberSchool
             }
 
             fileToUpload = new File(tmpSegmentDir, "merged");
-            IndexMaker.mergeQueryableIndex(indexes, schema.getAggregators(), fileToUpload);
+            IndexMerger.mergeQueryableIndex(indexes, schema.getAggregators(), fileToUpload, config.getIndexSpec());
           }
 
           // Map merged segment so we can extract dimensions
@@ -206,9 +211,11 @@ public class YeOldePlumberSchool implements PlumberSchool
           log.info("Spilling index[%d] with rows[%d] to: %s", indexToPersist.getCount(), rowsToPersist, dirToPersist);
 
           try {
-            IndexMaker.persist(
+            IndexMerger.persist(
                 indexToPersist.getIndex(),
-                dirToPersist
+                dirToPersist,
+                null,
+                config.getIndexSpec()
             );
 
             indexToPersist.swapSegment(null);

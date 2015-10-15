@@ -1,21 +1,21 @@
 /*
- * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
- */
+* Licensed to Metamarkets Group Inc. (Metamarkets) under one
+* or more contributor license agreements. See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership. Metamarkets licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License. You may obtain a copy of the License at
+*
+* http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied. See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
 
 package io.druid.segment;
 
@@ -62,9 +62,18 @@ public class TestIndex
       "placement",
       "placementish",
       "index",
+      "partial_null_column",
+      "null_column",
       "quality_uniques"
   };
-  public static final String[] DIMENSIONS = new String[]{"market", "quality", "placement", "placementish"};
+  public static final String[] DIMENSIONS = new String[]{
+      "market",
+      "quality",
+      "placement",
+      "placementish",
+      "partial_null_column",
+      "null_column",
+  };
   public static final String[] METRICS = new String[]{"index"};
   private static final Logger log = new Logger(TestIndex.class);
   private static final Interval DATA_INTERVAL = new Interval("2011-01-12T00:00:00.000Z/2011-05-01T00:00:00.000Z");
@@ -72,6 +81,7 @@ public class TestIndex
       new DoubleSumAggregatorFactory(METRICS[0], METRICS[0]),
       new HyperUniquesAggregatorFactory("quality_uniques", "quality")
   };
+  private static final IndexSpec indexSpec = new IndexSpec();
 
   static {
     if (ComplexMetrics.getSerdeForType("hyperUnique") == null) {
@@ -133,14 +143,15 @@ public class TestIndex
         mergedFile.mkdirs();
         mergedFile.deleteOnExit();
 
-        IndexMerger.persist(top, DATA_INTERVAL, topFile);
-        IndexMerger.persist(bottom, DATA_INTERVAL, bottomFile);
+        IndexMerger.persist(top, DATA_INTERVAL, topFile, null, indexSpec);
+        IndexMerger.persist(bottom, DATA_INTERVAL, bottomFile, null, indexSpec);
 
         mergedRealtime = IndexIO.loadIndex(
             IndexMerger.mergeQueryableIndex(
                 Arrays.asList(IndexIO.loadIndex(topFile), IndexIO.loadIndex(bottomFile)),
                 METRIC_AGGS,
-                mergedFile
+                mergedFile,
+                indexSpec
             )
         );
 
@@ -195,7 +206,7 @@ public class TestIndex
           {
             StringInputRowParser parser = new StringInputRowParser(
                 new DelimitedParseSpec(
-                    new TimestampSpec("ts", "iso"),
+                    new TimestampSpec("ts", "iso", null),
                     new DimensionsSpec(Arrays.asList(DIMENSIONS), null, null),
                     "\t",
                     "\u0001",
@@ -212,7 +223,6 @@ public class TestIndex
                 startTime.set(System.currentTimeMillis());
                 runOnce = true;
               }
-
               retVal.add(parser.parse(line));
 
               ++lineCount;
@@ -245,7 +255,7 @@ public class TestIndex
       someTmpFile.mkdirs();
       someTmpFile.deleteOnExit();
 
-      IndexMerger.persist(index, someTmpFile);
+      IndexMerger.persist(index, someTmpFile, null, indexSpec);
       return IndexIO.loadIndex(someTmpFile);
     }
     catch (IOException e) {

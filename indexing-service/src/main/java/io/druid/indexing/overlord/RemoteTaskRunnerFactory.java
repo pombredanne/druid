@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.indexing.overlord;
@@ -22,16 +20,16 @@ package io.druid.indexing.overlord;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Supplier;
 import com.google.inject.Inject;
+import com.metamx.common.concurrent.ScheduledExecutorFactory;
 import com.metamx.http.client.HttpClient;
 import io.druid.curator.cache.SimplePathChildrenCacheFactory;
 import io.druid.guice.annotations.Global;
 import io.druid.indexing.overlord.config.RemoteTaskRunnerConfig;
-import io.druid.indexing.overlord.setup.FillCapacityWorkerSelectStrategy;
 import io.druid.indexing.overlord.setup.WorkerBehaviorConfig;
-import io.druid.indexing.overlord.setup.WorkerSelectStrategy;
 import io.druid.server.initialization.IndexerZkConfig;
-import io.druid.server.initialization.ZkPathsConfig;
 import org.apache.curator.framework.CuratorFramework;
+
+import java.util.concurrent.ScheduledExecutorService;
 
 /**
  */
@@ -42,7 +40,8 @@ public class RemoteTaskRunnerFactory implements TaskRunnerFactory
   private final IndexerZkConfig zkPaths;
   private final ObjectMapper jsonMapper;
   private final HttpClient httpClient;
-  private final WorkerSelectStrategy strategy;
+  private final Supplier<WorkerBehaviorConfig> workerConfigRef;
+  private final ScheduledExecutorService cleanupExec;
 
   @Inject
   public RemoteTaskRunnerFactory(
@@ -51,7 +50,8 @@ public class RemoteTaskRunnerFactory implements TaskRunnerFactory
       final IndexerZkConfig zkPaths,
       final ObjectMapper jsonMapper,
       @Global final HttpClient httpClient,
-      final Supplier<WorkerBehaviorConfig> workerBehaviourConfigSupplier
+      final Supplier<WorkerBehaviorConfig> workerConfigRef,
+      ScheduledExecutorFactory factory
   )
   {
     this.curator = curator;
@@ -59,17 +59,8 @@ public class RemoteTaskRunnerFactory implements TaskRunnerFactory
     this.zkPaths = zkPaths;
     this.jsonMapper = jsonMapper;
     this.httpClient = httpClient;
-    if (workerBehaviourConfigSupplier != null) {
-      // Backwards compatibility
-      final WorkerBehaviorConfig workerBehaviorConfig = workerBehaviourConfigSupplier.get();
-      if (workerBehaviorConfig != null) {
-        this.strategy = workerBehaviorConfig.getSelectStrategy();
-      } else {
-        this.strategy = new FillCapacityWorkerSelectStrategy();
-      }
-    } else {
-      this.strategy = new FillCapacityWorkerSelectStrategy();
-    }
+    this.workerConfigRef = workerConfigRef;
+    this.cleanupExec = factory.create(1,"RemoteTaskRunner-Scheduled-Cleanup--%d");
   }
 
   @Override
@@ -85,7 +76,8 @@ public class RemoteTaskRunnerFactory implements TaskRunnerFactory
             .withCompressed(true)
             .build(),
         httpClient,
-        strategy
+        workerConfigRef,
+        cleanupExec
     );
   }
 }

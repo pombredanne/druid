@@ -1,29 +1,27 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.query.dimension;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.google.common.base.Charsets;
+import com.google.common.base.Preconditions;
 import com.metamx.common.StringUtils;
-import io.druid.query.extraction.DimExtractionFn;
+import io.druid.query.extraction.ExtractionFn;
 
 import java.nio.ByteBuffer;
 
@@ -34,18 +32,23 @@ public class ExtractionDimensionSpec implements DimensionSpec
   private static final byte CACHE_TYPE_ID = 0x1;
 
   private final String dimension;
-  private final DimExtractionFn dimExtractionFn;
+  private final ExtractionFn extractionFn;
   private final String outputName;
 
   @JsonCreator
   public ExtractionDimensionSpec(
       @JsonProperty("dimension") String dimension,
       @JsonProperty("outputName") String outputName,
-      @JsonProperty("dimExtractionFn") DimExtractionFn dimExtractionFn
+      @JsonProperty("extractionFn") ExtractionFn extractionFn,
+      // for backwards compatibility
+      @Deprecated @JsonProperty("dimExtractionFn") ExtractionFn dimExtractionFn
   )
   {
+    Preconditions.checkNotNull(dimension, "dimension must not be null");
+    Preconditions.checkArgument(extractionFn != null || dimExtractionFn != null, "extractionFn must not be null");
+
     this.dimension = dimension;
-    this.dimExtractionFn = dimExtractionFn;
+    this.extractionFn = extractionFn != null ? extractionFn : dimExtractionFn;
 
     // Do null check for backwards compatibility
     this.outputName = outputName == null ? dimension : outputName;
@@ -67,16 +70,16 @@ public class ExtractionDimensionSpec implements DimensionSpec
 
   @Override
   @JsonProperty
-  public DimExtractionFn getDimExtractionFn()
+  public ExtractionFn getExtractionFn()
   {
-    return dimExtractionFn;
+    return extractionFn;
   }
 
   @Override
   public byte[] getCacheKey()
   {
     byte[] dimensionBytes = StringUtils.toUtf8(dimension);
-    byte[] dimExtractionFnBytes = dimExtractionFn.getCacheKey();
+    byte[] dimExtractionFnBytes = extractionFn.getCacheKey();
 
     return ByteBuffer.allocate(1 + dimensionBytes.length + dimExtractionFnBytes.length)
                      .put(CACHE_TYPE_ID)
@@ -88,7 +91,7 @@ public class ExtractionDimensionSpec implements DimensionSpec
   @Override
   public boolean preservesOrdering()
   {
-    return dimExtractionFn.preservesOrdering();
+    return extractionFn.preservesOrdering();
   }
 
   @Override
@@ -96,7 +99,7 @@ public class ExtractionDimensionSpec implements DimensionSpec
   {
     return "ExtractionDimensionSpec{" +
            "dimension='" + dimension + '\'' +
-           ", dimExtractionFn=" + dimExtractionFn +
+           ", extractionFn=" + extractionFn +
            ", outputName='" + outputName + '\'' +
            '}';
   }
@@ -109,7 +112,7 @@ public class ExtractionDimensionSpec implements DimensionSpec
 
     ExtractionDimensionSpec that = (ExtractionDimensionSpec) o;
 
-    if (dimExtractionFn != null ? !dimExtractionFn.equals(that.dimExtractionFn) : that.dimExtractionFn != null)
+    if (extractionFn != null ? !extractionFn.equals(that.extractionFn) : that.extractionFn != null)
       return false;
     if (dimension != null ? !dimension.equals(that.dimension) : that.dimension != null) return false;
     if (outputName != null ? !outputName.equals(that.outputName) : that.outputName != null) return false;
@@ -121,7 +124,7 @@ public class ExtractionDimensionSpec implements DimensionSpec
   public int hashCode()
   {
     int result = dimension != null ? dimension.hashCode() : 0;
-    result = 31 * result + (dimExtractionFn != null ? dimExtractionFn.hashCode() : 0);
+    result = 31 * result + (extractionFn != null ? extractionFn.hashCode() : 0);
     result = 31 * result + (outputName != null ? outputName.hashCode() : 0);
     return result;
   }

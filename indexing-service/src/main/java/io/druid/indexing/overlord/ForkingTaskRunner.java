@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.indexing.overlord;
@@ -23,6 +21,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.CharMatcher;
 import com.google.common.base.Joiner;
 import com.google.common.base.Optional;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Splitter;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
@@ -33,7 +32,6 @@ import com.google.common.io.ByteSource;
 import com.google.common.io.ByteStreams;
 import com.google.common.io.Closer;
 import com.google.common.io.Files;
-import com.google.common.io.InputSupplier;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
@@ -58,6 +56,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Collection;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -72,8 +71,6 @@ public class ForkingTaskRunner implements TaskRunner, TaskLogStreamer
 {
   private static final EmittingLogger log = new EmittingLogger(ForkingTaskRunner.class);
   private static final String CHILD_PROPERTY_PREFIX = "druid.indexer.fork.property.";
-  private static final Splitter whiteSpaceSplitter = Splitter.on(CharMatcher.WHITESPACE).omitEmptyStrings();
-
   private final ForkingTaskRunnerConfig config;
   private final TaskConfig taskConfig;
   private final Properties props;
@@ -175,7 +172,18 @@ public class ForkingTaskRunner implements TaskRunner, TaskLogStreamer
                               command.add("-cp");
                               command.add(taskClasspath);
 
-                              Iterables.addAll(command, whiteSpaceSplitter.split(config.getJavaOpts()));
+                              Iterables.addAll(command, new QuotableWhiteSpaceSplitter(config.getJavaOpts()));
+
+                              // Override task specific javaOpts
+                              Object taskJavaOpts = task.getContextValue(
+                                  "druid.indexer.runner.javaOpts"
+                              );
+                              if (taskJavaOpts != null) {
+                                Iterables.addAll(
+                                    command,
+                                    new QuotableWhiteSpaceSplitter((String) taskJavaOpts)
+                                );
+                              }
 
                               for (String propName : props.stringPropertyNames()) {
                                 for (String allowedPrefix : config.getAllowedPrefixes()) {
@@ -201,6 +209,22 @@ public class ForkingTaskRunner implements TaskRunner, TaskLogStreamer
                                           props.getProperty(propName)
                                       )
                                   );
+                                }
+                              }
+
+                              // Override task specific properties
+                              final Map<String, Object> context = task.getContext();
+                              if (context != null) {
+                                for (String propName : context.keySet()) {
+                                  if (propName.startsWith(CHILD_PROPERTY_PREFIX)) {
+                                    command.add(
+                                        String.format(
+                                            "-D%s=%s",
+                                            propName.substring(CHILD_PROPERTY_PREFIX.length()),
+                                            task.getContextValue(propName)
+                                        )
+                                    );
+                                  }
                                 }
                               }
 
@@ -254,9 +278,11 @@ public class ForkingTaskRunner implements TaskRunner, TaskLogStreamer
                               // Process exited unsuccessfully
                               return TaskStatus.failure(task.getId());
                             }
-                          } catch (Throwable t) {
+                          }
+                          catch (Throwable t) {
                             throw closer.rethrow(t);
-                          } finally {
+                          }
+                          finally {
                             closer.close();
                           }
                         }
@@ -429,5 +455,41 @@ public class ForkingTaskRunner implements TaskRunner, TaskLogStreamer
       closer.register(process.getInputStream());
       closer.register(process.getOutputStream());
     }
+  }
+}
+
+/**
+ * Make an iterable of space delimited strings... unless there are quotes, which it preserves
+ */
+class QuotableWhiteSpaceSplitter implements Iterable<String>
+{
+  private final String string;
+
+  public QuotableWhiteSpaceSplitter(String string)
+  {
+    this.string = Preconditions.checkNotNull(string);
+  }
+
+  @Override
+  public Iterator<String> iterator()
+  {
+    return Splitter.on(
+        new CharMatcher()
+        {
+          private boolean inQuotes = false;
+
+          @Override
+          public boolean matches(char c)
+          {
+            if ('"' == c) {
+              inQuotes = !inQuotes;
+            }
+            if (inQuotes) {
+              return false;
+            }
+            return CharMatcher.BREAKING_WHITESPACE.matches(c);
+          }
+        }
+    ).omitEmptyStrings().split(string).iterator();
   }
 }

@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.segment.realtime.firehose;
@@ -93,33 +91,67 @@ class WikipediaIrcDecoder implements IrcDecoder
     this.namespaces = namespaces;
     this.geoIpDatabase = geoIpDatabase;
 
-    File geoDb;
     if (geoIpDatabase != null) {
-      geoDb = new File(geoIpDatabase);
+      this.geoLookup = openGeoIpDb(new File(geoIpDatabase));
     } else {
-      try {
-        String tmpDir = System.getProperty("java.io.tmpdir");
-        geoDb = new File(tmpDir, this.getClass().getCanonicalName() + ".GeoLite2-City.mmdb");
-        if (!geoDb.exists()) {
-          log.info("Downloading geo ip database to [%s]", geoDb);
-
-          FileUtils.copyInputStreamToFile(
-              new GZIPInputStream(
-                  new URL("http://geolite.maxmind.com/download/geoip/database/GeoLite2-City.mmdb.gz").openStream()
-              ),
-              geoDb
-          );
-        }
-      }
-      catch (IOException e) {
-        throw new RuntimeException("Unable to download geo ip database [%s]", e);
-      }
+      this.geoLookup = openDefaultGeoIpDb();
     }
+  }
+
+  private DatabaseReader openDefaultGeoIpDb() {
+    File geoDb = new File(System.getProperty("java.io.tmpdir"),
+                          this.getClass().getCanonicalName() + ".GeoLite2-City.mmdb");
     try {
-      geoLookup = new DatabaseReader(geoDb);
+      return openDefaultGeoIpDb(geoDb);
+    }
+    catch (RuntimeException e) {
+      log.warn(e.getMessage()+" Attempting to re-download.", e);
+      if (geoDb.exists() && !geoDb.delete()) {
+        throw new RuntimeException("Could not delete geo db file ["+ geoDb.getAbsolutePath() +"].");
+      }
+      // local download may be corrupt, will retry once.
+      return openDefaultGeoIpDb(geoDb);
+    }
+  }
+
+  private DatabaseReader openDefaultGeoIpDb(File geoDb) {
+    downloadGeoLiteDbToFile(geoDb);
+    return openGeoIpDb(geoDb);
+  }
+
+  private DatabaseReader openGeoIpDb(File geoDb) {
+    try {
+      DatabaseReader reader = new DatabaseReader(geoDb);
+      log.info("Using geo ip database at [%s].", geoDb);
+      return reader;
+    } catch (IOException e) {
+      throw new RuntimeException("Could not open geo db at ["+ geoDb.getAbsolutePath() +"].", e);
+    }
+  }
+
+  private void downloadGeoLiteDbToFile(File geoDb) {
+    if (geoDb.exists()) {
+      return;
+    }
+
+    try {
+      log.info("Downloading geo ip database to [%s]. This may take a few minutes.", geoDb.getAbsolutePath());
+
+      File tmpFile = File.createTempFile("druid", "geo");
+
+      FileUtils.copyInputStreamToFile(
+        new GZIPInputStream(
+          new URL("http://geolite.maxmind.com/download/geoip/database/GeoLite2-City.mmdb.gz").openStream()
+        ),
+        tmpFile
+      );
+
+      if (!tmpFile.renameTo(geoDb)) {
+        throw new RuntimeException("Unable to move geo file to ["+geoDb.getAbsolutePath()+"]!");
+      }
     }
     catch (IOException e) {
-      throw new RuntimeException("Unable to open geo ip lookup database", e);
+      throw new RuntimeException("Unable to download geo ip database.", e);
     }
   }
 

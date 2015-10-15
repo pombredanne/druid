@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013, 2014  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.server;
@@ -44,7 +42,6 @@ import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.io.UnsupportedEncodingException;
 import java.util.Map;
 
 /**
@@ -53,13 +50,17 @@ import java.util.Map;
 public class QueryResourceTest
 {
   private static final ObjectMapper jsonMapper = new DefaultObjectMapper();
-  public static final ServerConfig serverConfig = new ServerConfig(){
+  public static final ServerConfig serverConfig = new ServerConfig()
+  {
     @Override
-    public int getNumThreads(){
+    public int getNumThreads()
+    {
       return 1;
     }
+
     @Override
-    public Period getMaxIdleTime(){
+    public Period getMaxIdleTime()
+    {
       return Period.seconds(1);
     }
   };
@@ -93,10 +94,13 @@ public class QueryResourceTest
   };
 
   private static final ServiceEmitter noopServiceEmitter = new NoopServiceEmitter();
+
   @BeforeClass
-  public static void staticSetup(){
+  public static void staticSetup()
+  {
     com.metamx.emitter.EmittingLogger.registerEmitter(noopServiceEmitter);
   }
+
   @Before
   public void setup()
   {
@@ -104,6 +108,7 @@ public class QueryResourceTest
     EasyMock.expect(testServletRequest.getRemoteAddr()).andReturn("localhost").anyTimes();
     EasyMock.replay(testServletRequest);
   }
+
   private static final String simpleTimeSeriesQuery = "{\n"
                                                       + "    \"queryType\": \"timeseries\",\n"
                                                       + "    \"dataSource\": \"mmx_metrics\",\n"
@@ -118,6 +123,7 @@ public class QueryResourceTest
                                                       + "      }\n"
                                                       + "    ]\n"
                                                       + "}";
+
   @Test
   public void testGoodQuery() throws IOException
   {
@@ -129,10 +135,15 @@ public class QueryResourceTest
         new NoopServiceEmitter(),
         new NoopRequestLogger(),
         new QueryManager()
-        );
-    Response respone = queryResource.doPost(new ByteArrayInputStream(simpleTimeSeriesQuery.getBytes("UTF-8")), null /*pretty*/, testServletRequest);
+    );
+    Response respone = queryResource.doPost(
+        new ByteArrayInputStream(simpleTimeSeriesQuery.getBytes("UTF-8")),
+        null /*pretty*/,
+        testServletRequest
+    );
     Assert.assertNotNull(respone);
   }
+
   @Test
   public void testBadQuery() throws IOException
   {
@@ -146,7 +157,11 @@ public class QueryResourceTest
         new NoopRequestLogger(),
         new QueryManager()
     );
-    Response respone = queryResource.doPost(new ByteArrayInputStream("Meka Leka Hi Meka Hiney Ho".getBytes("UTF-8")), null /*pretty*/, testServletRequest);
+    Response respone = queryResource.doPost(
+        new ByteArrayInputStream("Meka Leka Hi Meka Hiney Ho".getBytes("UTF-8")),
+        null /*pretty*/,
+        testServletRequest
+    );
     Assert.assertNotNull(respone);
     Assert.assertEquals(Response.Status.INTERNAL_SERVER_ERROR.getStatusCode(), respone.getStatus());
   }

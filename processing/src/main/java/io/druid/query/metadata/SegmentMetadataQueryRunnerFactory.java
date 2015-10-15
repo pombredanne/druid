@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.query.metadata;
@@ -32,6 +30,7 @@ import com.metamx.common.logger.Logger;
 import io.druid.query.AbstractPrioritizedCallable;
 import io.druid.query.ConcatQueryRunner;
 import io.druid.query.Query;
+import io.druid.query.QueryContextKeys;
 import io.druid.query.QueryInterruptedException;
 import io.druid.query.QueryRunner;
 import io.druid.query.QueryRunnerFactory;
@@ -43,7 +42,9 @@ import io.druid.query.metadata.metadata.SegmentAnalysis;
 import io.druid.query.metadata.metadata.SegmentMetadataQuery;
 import io.druid.segment.QueryableIndex;
 import io.druid.segment.Segment;
+import io.druid.segment.StorageAdapter;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
@@ -82,14 +83,24 @@ public class SegmentMetadataQueryRunnerFactory implements QueryRunnerFactory<Seg
         SegmentMetadataQuery query = (SegmentMetadataQuery) inQ;
 
         final QueryableIndex index = segment.asQueryableIndex();
+
+        final Map<String, ColumnAnalysis> analyzedColumns;
+        final int numRows;
+        long totalSize = 0;
         if (index == null) {
-          return Sequences.empty();
+          // IncrementalIndexSegments (used by in-memory hydrants in the realtime service) do not have a QueryableIndex
+          StorageAdapter segmentAdapter = segment.asStorageAdapter();
+          analyzedColumns = analyzer.analyze(segmentAdapter, query.getAnalysisTypes());
+          numRows = segmentAdapter.getNumRows();
+        } else {
+          analyzedColumns = analyzer.analyze(index, query.getAnalysisTypes());
+          numRows = index.getNumRows();
         }
 
-        final Map<String, ColumnAnalysis> analyzedColumns = analyzer.analyze(index);
-
-        // Initialize with the size of the whitespace, 1 byte per
-        long totalSize = analyzedColumns.size() * index.getNumRows();
+        if (query.hasSize()) {
+          // Initialize with the size of the whitespace, 1 byte per
+          totalSize = analyzedColumns.size() * numRows;
+        }
 
         Map<String, ColumnAnalysis> columns = Maps.newTreeMap();
         ColumnIncluderator includerator = query.getToInclude();
@@ -148,13 +159,15 @@ public class SegmentMetadataQueryRunnerFactory implements QueryRunnerFactory<Seg
                           @Override
                           public Sequence<SegmentAnalysis> call() throws Exception
                           {
-                            return input.run(query, responseContext);
+                            return Sequences.simple(
+                                Sequences.toList(input.run(query, responseContext), new ArrayList<SegmentAnalysis>())
+                            );
                           }
                         }
                     );
                     try {
                       queryWatcher.registerQuery(query, future);
-                      final Number timeout = query.getContextValue("timeout", (Number) null);
+                      final Number timeout = query.getContextValue(QueryContextKeys.TIMEOUT, (Number) null);
                       return timeout == null ? future.get() : future.get(timeout.longValue(), TimeUnit.MILLISECONDS);
                     }
                     catch (InterruptedException e) {

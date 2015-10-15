@@ -17,11 +17,6 @@ RUN apt-get install -y mysql-server
 # Supervisor
 RUN apt-get install -y supervisor
 
-# Maven
-RUN wget -q -O - http://www.us.apache.org/dist/maven/maven-3/3.2.5/binaries/apache-maven-3.2.5-bin.tar.gz | tar -xzf - -C /usr/local
-RUN ln -s /usr/local/apache-maven-3.2.1 /usr/local/apache-maven
-RUN ln -s /usr/local/apache-maven/bin/mvn /usr/local/bin/mvn
-
 # Zookeeper
 RUN wget -q -O - http://www.us.apache.org/dist/zookeeper/zookeeper-3.4.6/zookeeper-3.4.6.tar.gz | tar -xzf - -C /usr/local
 RUN cp /usr/local/zookeeper-3.4.6/conf/zoo_sample.cfg /usr/local/zookeeper-3.4.6/conf/zoo.cfg
@@ -41,7 +36,7 @@ ADD lib/* /usr/local/druid/lib/
 WORKDIR /
 
 # Setup metadata store
-RUN /etc/init.d/mysql start && echo "GRANT ALL ON druid.* TO 'druid'@'%' IDENTIFIED BY 'diurd'; CREATE database druid;" | mysql -u root && /etc/init.d/mysql stop
+RUN /etc/init.d/mysql start && echo "GRANT ALL ON druid.* TO 'druid'@'%' IDENTIFIED BY 'diurd'; CREATE database druid DEFAULT CHARACTER SET utf8;" | mysql -u root && /etc/init.d/mysql stop
 
 # Add sample data
 RUN /etc/init.d/mysql start && java -Ddruid.metadata.storage.type=mysql -cp "/usr/local/druid/lib/*" io.druid.cli.Main tools metadata-init --connectURI="jdbc:mysql://localhost:3306/druid" --user=druid --password=diurd && /etc/init.d/mysql stop
@@ -58,12 +53,16 @@ RUN apt-get clean && rm -rf /tmp/* /var/tmp/*
 # - 8081: HTTP (coordinator)
 # - 8082: HTTP (broker)
 # - 8083: HTTP (historical)
+# - 8090: HTTP (overlord)
+# - 8091: HTTP (middlemanager)
 # - 3306: MySQL
 # - 2181 2888 3888: ZooKeeper
 # - 8100 8101 8102 8103 8104 : peon ports
 EXPOSE 8081
 EXPOSE 8082
 EXPOSE 8083
+EXPOSE 8090
+EXPOSE 8091
 EXPOSE 3306
 EXPOSE 2181 2888 3888
 EXPOSE 8100 8101 8102 8103 8104

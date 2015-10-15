@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013, 2014  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.client;
@@ -29,6 +27,7 @@ import com.fasterxml.jackson.databind.type.TypeFactory;
 import com.fasterxml.jackson.dataformat.smile.SmileFactory;
 import com.fasterxml.jackson.jaxrs.smile.SmileMediaTypes;
 import com.google.common.base.Charsets;
+import com.google.common.base.Strings;
 import com.google.common.base.Throwables;
 import com.google.common.collect.Maps;
 import com.google.common.io.ByteSource;
@@ -43,12 +42,16 @@ import com.metamx.common.guava.CloseQuietly;
 import com.metamx.common.guava.Sequence;
 import com.metamx.common.guava.Sequences;
 import com.metamx.common.logger.Logger;
+import com.metamx.emitter.service.ServiceEmitter;
+import com.metamx.emitter.service.ServiceMetricEvent;
 import com.metamx.http.client.HttpClient;
+import com.metamx.http.client.Request;
 import com.metamx.http.client.response.ClientResponse;
 import com.metamx.http.client.response.HttpResponseHandler;
 import com.metamx.http.client.response.StatusResponseHandler;
 import com.metamx.http.client.response.StatusResponseHolder;
 import io.druid.query.BySegmentResultValueClass;
+import io.druid.query.DruidMetrics;
 import io.druid.query.Query;
 import io.druid.query.QueryInterruptedException;
 import io.druid.query.QueryRunner;
@@ -61,6 +64,7 @@ import org.jboss.netty.buffer.ChannelBuffer;
 import org.jboss.netty.buffer.ChannelBufferInputStream;
 import org.jboss.netty.handler.codec.http.HttpChunk;
 import org.jboss.netty.handler.codec.http.HttpHeaders;
+import org.jboss.netty.handler.codec.http.HttpMethod;
 import org.jboss.netty.handler.codec.http.HttpResponse;
 
 import javax.ws.rs.core.MediaType;
@@ -94,6 +98,7 @@ public class DirectDruidClient<T> implements QueryRunner<T>
   private final ObjectMapper objectMapper;
   private final HttpClient httpClient;
   private final String host;
+  private final ServiceEmitter emitter;
 
   private final AtomicInteger openConnections;
   private final boolean isSmile;
@@ -103,7 +108,8 @@ public class DirectDruidClient<T> implements QueryRunner<T>
       QueryWatcher queryWatcher,
       ObjectMapper objectMapper,
       HttpClient httpClient,
-      String host
+      String host,
+      ServiceEmitter emitter
   )
   {
     this.warehouse = warehouse;
@@ -111,6 +117,7 @@ public class DirectDruidClient<T> implements QueryRunner<T>
     this.objectMapper = objectMapper;
     this.httpClient = httpClient;
     this.host = host;
+    this.emitter = emitter;
 
     this.isSmile = this.objectMapper.getFactory() instanceof SmileFactory;
     this.openConnections = new AtomicInteger();
@@ -152,9 +159,16 @@ public class DirectDruidClient<T> implements QueryRunner<T>
     try {
       log.debug("Querying url[%s]", url);
 
+      final long requestStartTime = System.currentTimeMillis();
+
+      final ServiceMetricEvent.Builder builder = toolChest.makeMetricBuilder(query);
+      builder.setDimension("server", host);
+      builder.setDimension(DruidMetrics.ID, Strings.nullToEmpty(query.getId()));
+
+
       final HttpResponseHandler<InputStream, InputStream> responseHandler = new HttpResponseHandler<InputStream, InputStream>()
       {
-        private long startTime;
+        private long responseStartTime;
         private final AtomicLong byteCount = new AtomicLong(0);
         private final BlockingQueue<InputStream> queue = new LinkedBlockingQueue<>();
         private final AtomicBoolean done = new AtomicBoolean(false);
@@ -163,7 +177,9 @@ public class DirectDruidClient<T> implements QueryRunner<T>
         public ClientResponse<InputStream> handleResponse(HttpResponse response)
         {
           log.debug("Initial response from url[%s]", url);
-          startTime = System.currentTimeMillis();
+          responseStartTime = System.currentTimeMillis();
+          emitter.emit(builder.build("query/node/ttfb", responseStartTime - requestStartTime));
+
           try {
             final String responseContext = response.headers().get("X-Druid-Response-Context");
             // context may be null in case of error or query timeout
@@ -256,9 +272,10 @@ public class DirectDruidClient<T> implements QueryRunner<T>
               "Completed request to url[%s] with %,d bytes returned in %,d millis [%,f b/s].",
               url,
               byteCount.get(),
-              stopTime - startTime,
-              byteCount.get() / (0.0001 * (stopTime - startTime))
+              stopTime - responseStartTime,
+              byteCount.get() / (0.0001 * (stopTime - responseStartTime))
           );
+          emitter.emit(builder.build("query/node/time", stopTime - requestStartTime));
           synchronized (done) {
             try {
               // An empty byte array is put at the end to give the SequenceInputStream.close() as something to close out
@@ -302,14 +319,17 @@ public class DirectDruidClient<T> implements QueryRunner<T>
           }
         }
       };
-      future = httpClient
-          .post(new URL(url))
-          .setContent(objectMapper.writeValueAsBytes(query))
-          .setHeader(
-              HttpHeaders.Names.CONTENT_TYPE,
-              isSmile ? SmileMediaTypes.APPLICATION_JACKSON_SMILE : MediaType.APPLICATION_JSON
-          )
-          .go(responseHandler);
+      future = httpClient.go(
+          new Request(
+              HttpMethod.POST,
+              new URL(url)
+          ).setContent(objectMapper.writeValueAsBytes(query))
+           .setHeader(
+               HttpHeaders.Names.CONTENT_TYPE,
+               isSmile ? SmileMediaTypes.APPLICATION_JACKSON_SMILE : MediaType.APPLICATION_JSON
+           ),
+          responseHandler
+      );
 
       queryWatcher.registerQuery(query, future);
 
@@ -330,15 +350,19 @@ public class DirectDruidClient<T> implements QueryRunner<T>
               if (future.isCancelled()) {
                 // forward the cancellation to underlying queriable node
                 try {
-                  StatusResponseHolder res = httpClient
-                      .delete(new URL(cancelUrl))
-                      .setContent(objectMapper.writeValueAsBytes(query))
-                      .setHeader(
-                          HttpHeaders.Names.CONTENT_TYPE,
-                          isSmile ? SmileMediaTypes.APPLICATION_JACKSON_SMILE : MediaType.APPLICATION_JSON
-                      )
-                      .go(new StatusResponseHandler(Charsets.UTF_8))
-                      .get();
+                  StatusResponseHolder res = httpClient.go(
+                      new Request(
+                          HttpMethod.DELETE,
+                          new URL(cancelUrl)
+                      ).setContent(objectMapper.writeValueAsBytes(query))
+                       .setHeader(
+                           HttpHeaders.Names.CONTENT_TYPE,
+                           isSmile
+                           ? SmileMediaTypes.APPLICATION_JACKSON_SMILE
+                           : MediaType.APPLICATION_JSON
+                       ),
+                      new StatusResponseHandler(Charsets.UTF_8)
+                  ).get();
                   if (res.getStatus().getCode() >= 500) {
                     throw new RE(
                         "Error cancelling query[%s]: queriable node returned status[%d] [%s].",

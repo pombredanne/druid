@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.indexing.common.task;
@@ -24,10 +22,12 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Ordering;
 import io.druid.segment.IndexIO;
 import io.druid.segment.IndexMerger;
+import io.druid.segment.IndexSpec;
 import io.druid.segment.IndexableAdapter;
 import io.druid.segment.QueryableIndexIndexableAdapter;
 import io.druid.segment.Rowboat;
@@ -35,8 +35,10 @@ import io.druid.segment.RowboatFilteringIndexAdapter;
 import io.druid.timeline.DataSegment;
 import io.druid.timeline.TimelineObjectHolder;
 import io.druid.timeline.VersionedIntervalTimeline;
+import io.druid.timeline.partition.PartitionChunk;
 import org.joda.time.Interval;
 
+import javax.annotation.Nullable;
 import java.io.File;
 import java.util.List;
 import java.util.Map;
@@ -45,14 +47,20 @@ import java.util.Map;
  */
 public class AppendTask extends MergeTaskBase
 {
+
+  private final IndexSpec indexSpec;
+
   @JsonCreator
   public AppendTask(
       @JsonProperty("id") String id,
       @JsonProperty("dataSource") String dataSource,
-      @JsonProperty("segments") List<DataSegment> segments
+      @JsonProperty("segments") List<DataSegment> segments,
+      @JsonProperty("indexSpec") IndexSpec indexSpec,
+      @JsonProperty("context") Map<String, Object> context
   )
   {
-    super(id, dataSource, segments);
+    super(id, dataSource, segments, context);
+    this.indexSpec = indexSpec == null ? new IndexSpec() : indexSpec;
   }
 
   @Override
@@ -67,22 +75,36 @@ public class AppendTask extends MergeTaskBase
       timeline.add(segment.getInterval(), segment.getVersion(), segment.getShardSpec().createChunk(segment));
     }
 
-    final List<SegmentToMergeHolder> segmentsToMerge = Lists.transform(
-        timeline.lookup(new Interval("1000-01-01/3000-01-01")),
-        new Function<TimelineObjectHolder<String, DataSegment>, SegmentToMergeHolder>()
-        {
-          @Override
-          public SegmentToMergeHolder apply(TimelineObjectHolder<String, DataSegment> input)
-          {
-            final DataSegment segment = input.getObject().getChunk(0).getObject();
-            final File file = Preconditions.checkNotNull(
-                segments.get(segment),
-                "File for segment %s", segment.getIdentifier()
-            );
-
-            return new SegmentToMergeHolder(segment, input.getInterval(), file);
-          }
-        }
+    final Iterable<SegmentToMergeHolder> segmentsToMerge = Iterables.concat(
+        Iterables.transform(
+            timeline.lookup(new Interval("1000-01-01/3000-01-01")),
+            new Function<TimelineObjectHolder<String, DataSegment>, Iterable<SegmentToMergeHolder>>()
+            {
+              @Override
+              public Iterable<SegmentToMergeHolder> apply(final TimelineObjectHolder<String, DataSegment> input)
+              {
+                return Iterables.transform(
+                    input.getObject(),
+                    new Function<PartitionChunk<DataSegment>, SegmentToMergeHolder>()
+                    {
+                      @Nullable
+                      @Override
+                      public SegmentToMergeHolder apply(PartitionChunk<DataSegment> chunkInput)
+                      {
+                        DataSegment segment = chunkInput.getObject();
+                        return new SegmentToMergeHolder(
+                            segment, input.getInterval(),
+                            Preconditions.checkNotNull(
+                                segments.get(segment),
+                                "File for segment %s", segment.getIdentifier()
+                            )
+                        );
+                      }
+                    }
+                );
+              }
+            }
+        )
     );
 
     List<IndexableAdapter> adapters = Lists.newArrayList();
@@ -105,7 +127,7 @@ public class AppendTask extends MergeTaskBase
       );
     }
 
-    return IndexMerger.append(adapters, outDir);
+    return IndexMerger.append(adapters, outDir, indexSpec);
   }
 
   @Override

@@ -1,26 +1,24 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.segment.filter;
 
+import com.google.common.base.Strings;
 import com.metamx.collections.bitmap.ImmutableBitmap;
-import io.druid.query.aggregation.Aggregators;
 import io.druid.query.filter.BitmapIndexSelector;
 import io.druid.query.filter.Filter;
 import io.druid.query.filter.ValueMatcher;
@@ -60,11 +58,11 @@ public class SelectorFilter implements Filter
   @Override
   public ValueMatcher makeMatcher(ColumnSelectorFactory columnSelectorFactory)
   {
-    final DimensionSelector dimensionSelector = columnSelectorFactory.makeDimensionSelector(dimension);
+    final DimensionSelector dimensionSelector = columnSelectorFactory.makeDimensionSelector(dimension, null);
 
-    // Missing columns are treated the same way as selector.getBitmapIndex, always returning false
+    // Missing columns match a null or empty string value and don't match anything else
     if (dimensionSelector == null) {
-      return new BooleanValueMatcher(false);
+      return new BooleanValueMatcher(Strings.isNullOrEmpty(value));
     } else {
       final int valueId = dimensionSelector.lookupId(value);
       return new ValueMatcher()

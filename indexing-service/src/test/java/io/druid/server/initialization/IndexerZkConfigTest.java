@@ -1,48 +1,43 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013, 2014  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.server.initialization;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.Binder;
 import com.google.inject.Injector;
 import com.google.inject.Module;
 import com.google.inject.name.Names;
-import io.druid.curator.CuratorConfig;
 import io.druid.guice.GuiceInjectors;
 import io.druid.guice.JsonConfigProvider;
 import io.druid.guice.JsonConfigurator;
 import io.druid.initialization.Initialization;
-import org.junit.AfterClass;
+import io.druid.jackson.DefaultObjectMapper;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
-import org.junit.Ignore;
 import org.junit.Test;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Properties;
@@ -138,7 +133,8 @@ public class IndexerZkConfigTest
   }
 
   @Test
-  public void testNullConfig(){
+  public void testNullConfig()
+  {
     propertyValues.clear();
 
     final Injector injector = Initialization.makeInjectorWithModules(
@@ -186,8 +182,47 @@ public class IndexerZkConfigTest
     Assert.assertEquals(clobberableProperties.size(), assertions);
   }
 
+
+
   @Test
-  public void testExactConfig(){
+  public void testIndexerBaseOverride()
+  {
+    final String overrideValue = "/foo/bar/baz";
+    final String indexerPropertyKey = indexerPropertyString + ".base";
+    final String priorValue = System.getProperty(indexerPropertyKey);
+    System.setProperty(indexerPropertyKey, overrideValue); // Set it here so that the binding picks it up
+    final Injector injector = Initialization.makeInjectorWithModules(
+        GuiceInjectors.makeStartupInjector(),
+        ImmutableList.<Module>of(simpleZkConfigModule)
+    );
+    propertyValues.clear();
+    propertyValues.setProperty(indexerPropertyKey, overrideValue); // Have to set it here as well annoyingly enough
+
+
+    JsonConfigurator configurator = injector.getBinding(JsonConfigurator.class).getProvider().get();
+
+    JsonConfigProvider<IndexerZkConfig> indexerPathsConfig = JsonConfigProvider.of(
+        indexerPropertyString,
+        IndexerZkConfig.class
+    );
+    indexerPathsConfig.inject(propertyValues, configurator);
+    IndexerZkConfig indexerZkConfig = indexerPathsConfig.get().get();
+
+
+    // Rewind value before we potentially fail
+    if(priorValue == null){
+      System.clearProperty(indexerPropertyKey);
+    }else {
+      System.setProperty(indexerPropertyKey, priorValue);
+    }
+
+    Assert.assertEquals(overrideValue, indexerZkConfig.getBase());
+    Assert.assertEquals(overrideValue + "/announcements", indexerZkConfig.getAnnouncementsPath());
+  }
+
+  @Test
+  public void testExactConfig()
+  {
     final Injector injector = Initialization.makeInjectorWithModules(
         GuiceInjectors.makeStartupInjector(),
         ImmutableList.<Module>of(simpleZkConfigModule)
@@ -206,9 +241,41 @@ public class IndexerZkConfigTest
 
     ZkPathsConfig zkPathsConfig1 = zkPathsConfig.get().get();
 
-    IndexerZkConfig indexerZkConfig = new IndexerZkConfig(zkPathsConfig1,null,null,null,null,null);
+    IndexerZkConfig indexerZkConfig = new IndexerZkConfig(zkPathsConfig1, null, null, null, null, null);
 
-    Assert.assertEquals("indexer", indexerZkConfig.getBase());
+    Assert.assertEquals("/druid/metrics/indexer", indexerZkConfig.getBase());
     Assert.assertEquals("/druid/metrics/indexer/announcements", indexerZkConfig.getAnnouncementsPath());
+  }
+
+  @Test
+  public void testFullOverride() throws Exception
+  {
+    final DefaultObjectMapper mapper = new DefaultObjectMapper();
+    final ZkPathsConfig zkPathsConfig = new ZkPathsConfig();
+
+    IndexerZkConfig indexerZkConfig = new IndexerZkConfig(
+        zkPathsConfig,
+        "/druid/prod",
+        "/druid/prod/a",
+        "/druid/prod/t",
+        "/druid/prod/s",
+        "/druid/prod/l"
+    );
+
+    Map<String, String> value = mapper.readValue(
+        mapper.writeValueAsString(indexerZkConfig), new TypeReference<Map<String, String>>()
+        {
+        }
+    );
+    IndexerZkConfig newConfig = new IndexerZkConfig(
+        zkPathsConfig,
+        value.get("base"),
+        value.get("announcementsPath"),
+        value.get("tasksPath"),
+        value.get("statusPath"),
+        value.get("leaderLatchPath")
+    );
+
+    Assert.assertEquals(indexerZkConfig, newConfig);
   }
 }

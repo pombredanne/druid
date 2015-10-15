@@ -1,32 +1,28 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.server.coordination;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Throwables;
-import com.google.common.util.concurrent.ListeningExecutorService;
-import com.google.common.util.concurrent.MoreExecutors;
-import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.metamx.common.lifecycle.LifecycleStart;
 import com.metamx.common.lifecycle.LifecycleStop;
 import com.metamx.emitter.EmittingLogger;
+import io.druid.concurrent.Execs;
 import io.druid.segment.loading.SegmentLoaderConfig;
 import io.druid.server.initialization.ZkPathsConfig;
 import org.apache.curator.framework.CuratorFramework;
@@ -37,7 +33,6 @@ import org.apache.curator.framework.recipes.cache.PathChildrenCacheListener;
 import org.apache.curator.utils.ZKPaths;
 
 import java.io.IOException;
-import java.util.concurrent.Executors;
 
 /**
  */
@@ -55,7 +50,6 @@ public abstract class BaseZkCoordinator implements DataSegmentChangeHandler
 
   private volatile PathChildrenCache loadQueueCache;
   private volatile boolean started = false;
-  private final ListeningExecutorService loadingExec;
 
   public BaseZkCoordinator(
       ObjectMapper jsonMapper,
@@ -70,12 +64,6 @@ public abstract class BaseZkCoordinator implements DataSegmentChangeHandler
     this.config = config;
     this.me = me;
     this.curator = curator;
-    this.loadingExec = MoreExecutors.listeningDecorator(
-        Executors.newFixedThreadPool(
-            config.getNumLoadingThreads(),
-            new ThreadFactoryBuilder().setDaemon(true).setNameFormat("ZkCoordinator-%s").build()
-        )
-    );
   }
 
   @LifecycleStart
@@ -97,7 +85,7 @@ public abstract class BaseZkCoordinator implements DataSegmentChangeHandler
           loadQueueLocation,
           true,
           true,
-          loadingExec
+          Execs.multiThreaded(config.getNumLoadingThreads(), "ZkCoordinator-%s")
       );
 
       try {
@@ -121,7 +109,7 @@ public abstract class BaseZkCoordinator implements DataSegmentChangeHandler
                         child.getData(), DataSegmentChangeRequest.class
                     );
 
-                    log.info("New request[%s] with node[%s].", request.asString(), path);
+                    log.info("New request[%s] with zNode[%s].", request.asString(), path);
 
                     try {
                       request.go(
@@ -145,9 +133,9 @@ public abstract class BaseZkCoordinator implements DataSegmentChangeHandler
                                   curator.delete().guaranteed().forPath(path);
                                 }
                                 catch (Exception e1) {
-                                  log.error(e1, "Failed to delete node[%s], but ignoring exception.", path);
+                                  log.error(e1, "Failed to delete zNode[%s], but ignoring exception.", path);
                                 }
-                                log.error(e, "Exception while removing node[%s]", path);
+                                log.error(e, "Exception while removing zNode[%s]", path);
                                 throw Throwables.propagate(e);
                               }
                             }
@@ -159,7 +147,7 @@ public abstract class BaseZkCoordinator implements DataSegmentChangeHandler
                         curator.delete().guaranteed().forPath(path);
                       }
                       catch (Exception e1) {
-                        log.error(e1, "Failed to delete node[%s], but ignoring exception.", path);
+                        log.error(e1, "Failed to delete zNode[%s], but ignoring exception.", path);
                       }
 
                       log.makeAlert(e, "Segment load/unload: uncaught exception.")
@@ -170,7 +158,7 @@ public abstract class BaseZkCoordinator implements DataSegmentChangeHandler
 
                     break;
                   case CHILD_REMOVED:
-                    log.info("Node[%s] was removed", event.getData().getPath());
+                    log.info("zNode[%s] was removed", event.getData().getPath());
                     break;
                   default:
                     log.info("Ignoring event[%s]", event);
@@ -219,9 +207,4 @@ public abstract class BaseZkCoordinator implements DataSegmentChangeHandler
   public abstract void loadLocalCache();
 
   public abstract DataSegmentChangeHandler getDataSegmentChangeHandler();
-
-  public ListeningExecutorService getLoadingExecutor()
-  {
-    return loadingExec;
-  }
 }

@@ -1,26 +1,25 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.segment.data;
 
 import com.google.common.io.Closeables;
 import com.google.common.primitives.Floats;
+import com.metamx.common.guava.CloseQuietly;
 import io.druid.segment.CompressedPools;
 import org.junit.After;
 import org.junit.Assert;
@@ -71,6 +70,8 @@ public class CompressedFloatsIndexedSupplierTest extends CompressionStrategyTest
 
   private void setupSimple(final int chunkSize)
   {
+    CloseQuietly.close(indexed);
+
     vals = new float[]{
         0.0f, 0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 0.10f, 0.11f, 0.12f, 0.13f, 0.14f, 0.15f, 0.16f
     };
@@ -96,6 +97,8 @@ public class CompressedFloatsIndexedSupplierTest extends CompressionStrategyTest
 
   private void makeWithSerde(int chunkSize) throws IOException
   {
+    CloseQuietly.close(indexed);
+
     ByteArrayOutputStream baos = new ByteArrayOutputStream();
     final CompressedFloatsIndexedSupplier theSupplier = CompressedFloatsIndexedSupplier.fromFloatBuffer(
         FloatBuffer.wrap(vals), chunkSize, ByteOrder.nativeOrder(), compressionStrategy

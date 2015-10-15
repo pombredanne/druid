@@ -1,26 +1,25 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.segment;
 
 import com.google.common.base.Function;
 import com.google.common.base.Predicates;
+import com.google.common.base.Strings;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
@@ -29,6 +28,7 @@ import com.metamx.common.guava.Sequence;
 import com.metamx.common.guava.Sequences;
 import io.druid.granularity.QueryGranularity;
 import io.druid.query.QueryInterruptedException;
+import io.druid.query.extraction.ExtractionFn;
 import io.druid.query.filter.Filter;
 import io.druid.segment.column.Column;
 import io.druid.segment.column.ColumnCapabilities;
@@ -42,6 +42,7 @@ import io.druid.segment.data.Offset;
 import org.joda.time.DateTime;
 import org.joda.time.Interval;
 
+import javax.annotation.Nullable;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.Iterator;
@@ -51,6 +52,8 @@ import java.util.Map;
  */
 public class QueryableIndexStorageAdapter implements StorageAdapter
 {
+  private static final NullDimensionSelector NULL_DIMENSION_SELECTOR = new NullDimensionSelector();
+
   private final QueryableIndex index;
 
   public QueryableIndexStorageAdapter(
@@ -96,9 +99,15 @@ public class QueryableIndexStorageAdapter implements StorageAdapter
       return 0;
     }
     if (!column.getCapabilities().isDictionaryEncoded()) {
-      throw new UnsupportedOperationException("Only know cardinality of dictionary encoded columns.");
+      return Integer.MAX_VALUE;
     }
     return column.getDictionaryEncoding().getCardinality();
+  }
+
+  @Override
+  public int getNumRows()
+  {
+    return index.getNumRows();
   }
 
   @Override
@@ -134,13 +143,28 @@ public class QueryableIndexStorageAdapter implements StorageAdapter
   }
 
   @Override
+  public ColumnCapabilities getColumnCapabilities(String column)
+  {
+    return index.getColumn(column).getCapabilities();
+  }
+
+  @Override
+  public DateTime getMaxIngestedEventTime()
+  {
+    // For immutable indexes, maxIngestedEventTime is maxTime.
+    return getMaxTime();
+  }
+
+  @Override
   public Sequence<Cursor> makeCursors(Filter filter, Interval interval, QueryGranularity gran)
   {
     Interval actualInterval = interval;
 
+    long minDataTimestamp = getMinTime().getMillis();
+    long maxDataTimestamp = getMaxTime().getMillis();
     final Interval dataInterval = new Interval(
-        getMinTime().getMillis(),
-        gran.next(gran.truncate(getMaxTime().getMillis()))
+        minDataTimestamp,
+        gran.next(gran.truncate(maxDataTimestamp))
     );
 
     if (!actualInterval.overlaps(dataInterval)) {
@@ -167,7 +191,7 @@ public class QueryableIndexStorageAdapter implements StorageAdapter
     }
 
     return Sequences.filter(
-        new CursorSequenceBuilder(index, actualInterval, gran, offset).build(),
+        new CursorSequenceBuilder(index, actualInterval, gran, offset, maxDataTimestamp).build(),
         Predicates.<Cursor>notNull()
     );
   }
@@ -178,18 +202,21 @@ public class QueryableIndexStorageAdapter implements StorageAdapter
     private final Interval interval;
     private final QueryGranularity gran;
     private final Offset offset;
+    private final long maxDataTimestamp;
 
     public CursorSequenceBuilder(
         ColumnSelector index,
         Interval interval,
         QueryGranularity gran,
-        Offset offset
+        Offset offset,
+        long maxDataTimestamp
     )
     {
       this.index = index;
       this.interval = interval;
       this.gran = gran;
       this.offset = offset;
+      this.maxDataTimestamp = maxDataTimestamp;
     }
 
     public Sequence<Cursor> build()
@@ -217,8 +244,9 @@ public class QueryableIndexStorageAdapter implements StorageAdapter
                     baseOffset.increment();
                   }
 
+                  long threshold = Math.min(interval.getEndMillis(), gran.next(input));
                   final Offset offset = new TimestampCheckingOffset(
-                      baseOffset, timestamps, Math.min(interval.getEndMillis(), gran.next(input))
+                      baseOffset, timestamps, threshold, maxDataTimestamp < threshold
                   );
 
                   return new Cursor()
@@ -265,12 +293,22 @@ public class QueryableIndexStorageAdapter implements StorageAdapter
                     }
 
                     @Override
-                    public DimensionSelector makeDimensionSelector(String dimension)
+                    public DimensionSelector makeDimensionSelector(
+                        final String dimension,
+                        @Nullable final ExtractionFn extractionFn
+                    )
                     {
-                      DictionaryEncodedColumn cachedColumn = dictionaryColumnCache.get(dimension);
                       final Column columnDesc = index.getColumn(dimension);
+                      if (columnDesc == null) {
+                        return NULL_DIMENSION_SELECTOR;
+                      }
 
-                      if (cachedColumn == null && columnDesc != null) {
+                      if (dimension.equals(Column.TIME_COLUMN_NAME)) {
+                        return new SingleScanTimeDimSelector(makeLongColumnSelector(dimension), extractionFn);
+                      }
+
+                      DictionaryEncodedColumn cachedColumn = dictionaryColumnCache.get(dimension);
+                      if (cachedColumn == null) {
                         cachedColumn = columnDesc.getDictionaryEncoding();
                         dictionaryColumnCache.put(dimension, cachedColumn);
                       }
@@ -278,7 +316,7 @@ public class QueryableIndexStorageAdapter implements StorageAdapter
                       final DictionaryEncodedColumn column = cachedColumn;
 
                       if (column == null) {
-                        return null;
+                        return NULL_DIMENSION_SELECTOR;
                       } else if (columnDesc.getCapabilities().hasMultipleValues()) {
                         return new DimensionSelector()
                         {
@@ -297,13 +335,20 @@ public class QueryableIndexStorageAdapter implements StorageAdapter
                           @Override
                           public String lookupName(int id)
                           {
-                            final String retVal = column.lookupName(id);
-                            return retVal == null ? "" : retVal;
+                            final String value = column.lookupName(id);
+                            return extractionFn == null ?
+                                   Strings.nullToEmpty(value) :
+                                   extractionFn.apply(Strings.nullToEmpty(value));
                           }
 
                           @Override
                           public int lookupId(String name)
                           {
+                            if (extractionFn != null) {
+                              throw new UnsupportedOperationException(
+                                  "cannot perform lookup when applying an extraction function"
+                              );
+                            }
                             return column.lookupId(name);
                           }
                         };
@@ -333,6 +378,18 @@ public class QueryableIndexStorageAdapter implements StorageAdapter
                               {
                                 return Iterators.singletonIterator(column.getSingleValueRow(cursorOffset.getOffset()));
                               }
+
+                              @Override
+                              public void fill(int index, int[] toFill)
+                              {
+                                throw new UnsupportedOperationException("fill not supported");
+                              }
+
+                              @Override
+                              public void close() throws IOException
+                              {
+
+                              }
                             };
                           }
 
@@ -345,12 +402,18 @@ public class QueryableIndexStorageAdapter implements StorageAdapter
                           @Override
                           public String lookupName(int id)
                           {
-                            return column.lookupName(id);
+                            final String value = column.lookupName(id);
+                            return extractionFn == null ? value : extractionFn.apply(value);
                           }
 
                           @Override
                           public int lookupId(String name)
                           {
+                            if (extractionFn != null) {
+                              throw new UnsupportedOperationException(
+                                  "cannot perform lookup when applying an extraction function"
+                              );
+                            }
                             return column.lookupId(name);
                           }
                         };
@@ -620,14 +683,15 @@ public class QueryableIndexStorageAdapter implements StorageAdapter
     public TimestampCheckingOffset(
         Offset baseOffset,
         GenericColumn timestamps,
-        long threshold
+        long threshold,
+        boolean allWithinThreshold
     )
     {
       this.baseOffset = baseOffset;
       this.timestamps = timestamps;
       this.threshold = threshold;
       // checks if all the values are within the Threshold specified, skips timestamp lookups and checks if all values are within threshold.
-      this.allWithinThreshold = timestamps.getLongSingleValueRow(timestamps.length() - 1) < threshold;
+      this.allWithinThreshold = allWithinThreshold;
     }
 
     @Override
@@ -639,7 +703,7 @@ public class QueryableIndexStorageAdapter implements StorageAdapter
     @Override
     public Offset clone()
     {
-      return new TimestampCheckingOffset(baseOffset.clone(), timestamps, threshold);
+      return new TimestampCheckingOffset(baseOffset.clone(), timestamps, threshold, allWithinThreshold);
     }
 
     @Override
@@ -691,4 +755,5 @@ public class QueryableIndexStorageAdapter implements StorageAdapter
       return currentOffset;
     }
   }
+
 }

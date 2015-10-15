@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.query;
@@ -100,17 +98,28 @@ public class PrioritizedExecutorService extends AbstractExecutorService implemen
     this.defaultPriority = defaultPriority;
   }
 
-  @Override protected <T> PrioritizedListenableFutureTask<T> newTaskFor(Runnable runnable, T value) {
-    Preconditions.checkArgument(allowRegularTasks || runnable instanceof PrioritizedRunnable, "task does not implement PrioritizedRunnable");
-    return PrioritizedListenableFutureTask.create(ListenableFutureTask.create(runnable, value),
-                                                  runnable instanceof PrioritizedRunnable
-                                                  ? ((PrioritizedRunnable) runnable).getPriority()
-                                                  : defaultPriority
+  @Override
+  protected <T> PrioritizedListenableFutureTask<T> newTaskFor(Runnable runnable, T value)
+  {
+    Preconditions.checkArgument(
+        allowRegularTasks || runnable instanceof PrioritizedRunnable,
+        "task does not implement PrioritizedRunnable"
+    );
+    return PrioritizedListenableFutureTask.create(
+        ListenableFutureTask.create(runnable, value),
+        runnable instanceof PrioritizedRunnable
+        ? ((PrioritizedRunnable) runnable).getPriority()
+        : defaultPriority
     );
   }
 
-  @Override protected <T> PrioritizedListenableFutureTask<T> newTaskFor(Callable<T> callable) {
-    Preconditions.checkArgument(allowRegularTasks || callable instanceof PrioritizedCallable, "task does not implement PrioritizedCallable");
+  @Override
+  protected <T> PrioritizedListenableFutureTask<T> newTaskFor(Callable<T> callable)
+  {
+    Preconditions.checkArgument(
+        allowRegularTasks || callable instanceof PrioritizedCallable,
+        "task does not implement PrioritizedCallable"
+    );
     return PrioritizedListenableFutureTask.create(
         ListenableFutureTask.create(callable), callable instanceof PrioritizedCallable
                                                ? ((PrioritizedCallable) callable).getPriority()
@@ -118,15 +127,21 @@ public class PrioritizedExecutorService extends AbstractExecutorService implemen
     );
   }
 
-  @Override public ListenableFuture<?> submit(Runnable task) {
+  @Override
+  public ListenableFuture<?> submit(Runnable task)
+  {
     return (ListenableFuture<?>) super.submit(task);
   }
 
-  @Override public <T> ListenableFuture<T> submit(Runnable task, @Nullable T result) {
+  @Override
+  public <T> ListenableFuture<T> submit(Runnable task, @Nullable T result)
+  {
     return (ListenableFuture<T>) super.submit(task, result);
   }
 
-  @Override public <T> ListenableFuture<T> submit(Callable<T> task) {
+  @Override
+  public <T> ListenableFuture<T> submit(Callable<T> task)
+  {
     return (ListenableFuture<T>) super.submit(task);
   }
 
@@ -172,7 +187,10 @@ public class PrioritizedExecutorService extends AbstractExecutorService implemen
   }
 
 
-  public static class PrioritizedListenableFutureTask<V> implements RunnableFuture<V>, ListenableFuture<V>, PrioritizedRunnable, Comparable<PrioritizedListenableFutureTask>
+  public static class PrioritizedListenableFutureTask<V> implements RunnableFuture<V>,
+      ListenableFuture<V>,
+      PrioritizedRunnable,
+      Comparable<PrioritizedListenableFutureTask>
   {
     public static <V> PrioritizedListenableFutureTask<V> create(PrioritizedRunnable task, @Nullable V result)
     {

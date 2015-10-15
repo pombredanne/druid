@@ -1,36 +1,27 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.indexing.worker;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.introspect.AnnotationIntrospectorPair;
-import com.fasterxml.jackson.databind.introspect.GuiceAnnotationIntrospector;
-import com.fasterxml.jackson.databind.introspect.GuiceInjectableValues;
 import com.fasterxml.jackson.databind.jsontype.NamedType;
 import com.google.common.base.Joiner;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.io.Files;
-import com.google.inject.Binder;
-import com.google.inject.Guice;
-import com.google.inject.Injector;
 import io.druid.curator.PotentiallyGzippedCompressionProvider;
 import io.druid.indexing.common.IndexingServiceCondition;
 import io.druid.indexing.common.SegmentLoaderFactory;
@@ -44,24 +35,21 @@ import io.druid.indexing.overlord.TestRemoteTaskRunnerConfig;
 import io.druid.indexing.overlord.ThreadPoolTaskRunner;
 import io.druid.indexing.worker.config.WorkerConfig;
 import io.druid.jackson.DefaultObjectMapper;
-import io.druid.segment.column.ColumnConfig;
-import io.druid.segment.loading.DataSegmentPuller;
-import io.druid.segment.loading.LocalDataSegmentPuller;
-import io.druid.segment.loading.OmniSegmentLoader;
 import io.druid.segment.loading.SegmentLoaderConfig;
+import io.druid.segment.loading.SegmentLoaderLocalCacheManager;
 import io.druid.segment.loading.StorageLocationConfig;
 import io.druid.server.initialization.IndexerZkConfig;
 import io.druid.server.initialization.ZkPathsConfig;
-import junit.framework.Assert;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.curator.test.TestingCluster;
+import org.joda.time.Period;
 import org.junit.After;
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 
-import java.io.File;
 import java.util.List;
 
 /**
@@ -69,39 +57,6 @@ import java.util.List;
 public class WorkerTaskMonitorTest
 {
   private static final ObjectMapper jsonMapper = new DefaultObjectMapper();
-  private static final Injector injector = Guice.createInjector(
-      new com.google.inject.Module()
-      {
-        @Override
-        public void configure(Binder binder)
-        {
-          binder.bind(ColumnConfig.class).toInstance(
-              new ColumnConfig()
-              {
-                @Override
-                public int columnCacheSizeBytes()
-                {
-                  return 1024 * 1024;
-                }
-              }
-          );
-        }
-      }
-  );
-
-  static {
-    final GuiceAnnotationIntrospector guiceIntrospector = new GuiceAnnotationIntrospector();
-
-    jsonMapper.setInjectableValues(new GuiceInjectableValues(injector));
-    jsonMapper.setAnnotationIntrospectors(
-        new AnnotationIntrospectorPair(
-            guiceIntrospector, jsonMapper.getSerializationConfig().getAnnotationIntrospector()
-        ),
-        new AnnotationIntrospectorPair(
-            guiceIntrospector, jsonMapper.getDeserializationConfig().getAnnotationIntrospector()
-        )
-    );
-  }
 
   private static final Joiner joiner = Joiner.on("/");
   private static final String basePath = "/test/druid";
@@ -141,36 +96,42 @@ public class WorkerTaskMonitorTest
     workerCuratorCoordinator = new WorkerCuratorCoordinator(
         jsonMapper,
         new IndexerZkConfig(
-        new ZkPathsConfig()
-        {
-          @Override
-          public String getBase()
-          {
-            return basePath;
-          }
-        },null,null,null,null,null),
-        new TestRemoteTaskRunnerConfig(),
+            new ZkPathsConfig()
+            {
+              @Override
+              public String getBase()
+              {
+                return basePath;
+              }
+            }, null, null, null, null, null
+        ),
+        new TestRemoteTaskRunnerConfig(new Period("PT1S")),
         cf,
         worker
     );
     workerCuratorCoordinator.start();
 
-    final File tmp = Files.createTempDir();
 
     // Start a task monitor
-    workerTaskMonitor = new WorkerTaskMonitor(
+    workerTaskMonitor = createTaskMonitor();
+    jsonMapper.registerSubtypes(new NamedType(TestMergeTask.class, "test"));
+    jsonMapper.registerSubtypes(new NamedType(TestRealtimeTask.class, "test_realtime"));
+    workerTaskMonitor.start();
+
+    task = TestMergeTask.createDummyTask("test");
+  }
+
+  private WorkerTaskMonitor createTaskMonitor()
+  {
+    return new WorkerTaskMonitor(
         jsonMapper,
         cf,
         workerCuratorCoordinator,
         new ThreadPoolTaskRunner(
             new TaskToolboxFactory(
-                new TaskConfig(tmp.toString(), null, null, 0, null),
+                new TaskConfig(Files.createTempDir().toString(), null, null, 0, null),
                 null, null, null, null, null, null, null, null, null, null, null, new SegmentLoaderFactory(
-                new OmniSegmentLoader(
-                    ImmutableMap.<String, DataSegmentPuller>of(
-                        "local",
-                        new LocalDataSegmentPuller()
-                    ),
+                new SegmentLoaderLocalCacheManager(
                     null,
                     new SegmentLoaderConfig()
                     {
@@ -180,6 +141,7 @@ public class WorkerTaskMonitorTest
                         return Lists.newArrayList();
                       }
                     }
+                    , jsonMapper
                 )
             ), jsonMapper
             ),
@@ -187,11 +149,6 @@ public class WorkerTaskMonitorTest
         ),
         new WorkerConfig().setCapacity(1)
     );
-    jsonMapper.registerSubtypes(new NamedType(TestMergeTask.class, "test"));
-    jsonMapper.registerSubtypes(new NamedType(TestRealtimeTask.class, "test_realtime"));
-    workerTaskMonitor.start();
-
-    task = TestMergeTask.createDummyTask("test");
   }
 
   @After
@@ -227,7 +184,6 @@ public class WorkerTaskMonitorTest
         )
     );
 
-
     Assert.assertTrue(
         TestUtils.conditionValid(
             new IndexingServiceCondition()
@@ -252,5 +208,99 @@ public class WorkerTaskMonitorTest
 
     Assert.assertEquals(task.getId(), taskAnnouncement.getTaskStatus().getId());
     Assert.assertEquals(TaskStatus.Status.RUNNING, taskAnnouncement.getTaskStatus().getStatusCode());
+  }
+
+  @Test
+  public void testGetAnnouncements() throws Exception
+  {
+    cf.create()
+      .creatingParentsIfNeeded()
+      .forPath(joiner.join(tasksPath, task.getId()), jsonMapper.writeValueAsBytes(task));
+
+    Assert.assertTrue(
+        TestUtils.conditionValid(
+            new IndexingServiceCondition()
+            {
+              @Override
+              public boolean isValid()
+              {
+                try {
+                  return cf.checkExists().forPath(joiner.join(statusPath, task.getId())) != null;
+                }
+                catch (Exception e) {
+                  return false;
+                }
+              }
+            }
+        )
+    );
+
+    List<TaskAnnouncement> announcements = workerCuratorCoordinator.getAnnouncements();
+    Assert.assertEquals(1, announcements.size());
+    Assert.assertEquals(task.getId(), announcements.get(0).getTaskStatus().getId());
+    Assert.assertEquals(TaskStatus.Status.RUNNING, announcements.get(0).getTaskStatus().getStatusCode());
+  }
+
+  @Test
+  public void testRestartCleansOldStatus() throws Exception
+  {
+    cf.create()
+      .creatingParentsIfNeeded()
+      .forPath(joiner.join(tasksPath, task.getId()), jsonMapper.writeValueAsBytes(task));
+
+    Assert.assertTrue(
+        TestUtils.conditionValid(
+            new IndexingServiceCondition()
+            {
+              @Override
+              public boolean isValid()
+              {
+                try {
+                  return cf.checkExists().forPath(joiner.join(statusPath, task.getId())) != null;
+                }
+                catch (Exception e) {
+                  return false;
+                }
+              }
+            }
+        )
+    );
+    // simulate node restart
+    workerTaskMonitor.stop();
+    workerTaskMonitor = createTaskMonitor();
+    workerTaskMonitor.start();
+    List<TaskAnnouncement> announcements = workerCuratorCoordinator.getAnnouncements();
+    Assert.assertEquals(1, announcements.size());
+    Assert.assertEquals(task.getId(), announcements.get(0).getTaskStatus().getId());
+    Assert.assertEquals(TaskStatus.Status.FAILED, announcements.get(0).getTaskStatus().getStatusCode());
+  }
+
+  @Test
+  public void testStatusAnnouncementsArePersistent() throws Exception
+  {
+    cf.create()
+      .creatingParentsIfNeeded()
+      .forPath(joiner.join(tasksPath, task.getId()), jsonMapper.writeValueAsBytes(task));
+
+    Assert.assertTrue(
+        TestUtils.conditionValid(
+            new IndexingServiceCondition()
+            {
+              @Override
+              public boolean isValid()
+              {
+                try {
+                  return cf.checkExists().forPath(joiner.join(statusPath, task.getId())) != null;
+                }
+                catch (Exception e) {
+                  return false;
+                }
+              }
+            }
+        )
+    );
+    // ephermal owner is 0 is created node is PERSISTENT
+    Assert.assertEquals(0, cf.checkExists().forPath(joiner.join(statusPath, task.getId())).getEphemeralOwner());
+
   }
 }

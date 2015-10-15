@@ -1,24 +1,23 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.segment.incremental;
 
+import com.google.common.base.Supplier;
 import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 import com.google.common.collect.Maps;
@@ -114,7 +113,7 @@ public class OnheapIncrementalIndex extends IncrementalIndex<Aggregator>
 
   @Override
   protected Aggregator[] initAggs(
-      AggregatorFactory[] metrics, ThreadLocal<InputRow> in, boolean deserializeComplexMetrics
+      AggregatorFactory[] metrics, Supplier<InputRow> rowSupplier, boolean deserializeComplexMetrics
   )
   {
     return new Aggregator[metrics.length];
@@ -127,7 +126,8 @@ public class OnheapIncrementalIndex extends IncrementalIndex<Aggregator>
       InputRow row,
       AtomicInteger numEntries,
       TimeAndDims key,
-      ThreadLocal<InputRow> in
+      ThreadLocal<InputRow> rowContainer,
+      Supplier<InputRow> rowSupplier
   ) throws IndexSizeExceededException
   {
     final Integer priorIndex = facts.get(key);
@@ -138,10 +138,11 @@ public class OnheapIncrementalIndex extends IncrementalIndex<Aggregator>
       aggs = concurrentGet(priorIndex);
     } else {
       aggs = new Aggregator[metrics.length];
+
       for (int i = 0; i < metrics.length; i++) {
         final AggregatorFactory agg = metrics[i];
         aggs[i] = agg.factorize(
-            makeColumnSelectorFactory(agg, in, deserializeComplexMetrics)
+            makeColumnSelectorFactory(agg, rowSupplier, deserializeComplexMetrics)
         );
       }
       final Integer rowIndex = indexIncrement.getAndIncrement();
@@ -150,7 +151,7 @@ public class OnheapIncrementalIndex extends IncrementalIndex<Aggregator>
 
       // Last ditch sanity checks
       if (numEntries.get() >= maxRowCount && !facts.containsKey(key)) {
-        throw new IndexSizeExceededException("Maximum number of rows reached");
+        throw new IndexSizeExceededException("Maximum number of rows [%d] reached", maxRowCount);
       }
       final Integer prev = facts.putIfAbsent(key, rowIndex);
       if (null == prev) {
@@ -164,7 +165,7 @@ public class OnheapIncrementalIndex extends IncrementalIndex<Aggregator>
       }
     }
 
-    in.set(row);
+    rowContainer.set(row);
 
     for (Aggregator agg : aggs) {
       synchronized (agg) {
@@ -172,7 +173,7 @@ public class OnheapIncrementalIndex extends IncrementalIndex<Aggregator>
       }
     }
 
-    in.set(null);
+    rowContainer.set(null);
 
 
     return numEntries.get();
@@ -267,9 +268,6 @@ public class OnheapIncrementalIndex extends IncrementalIndex<Aggregator>
 
     public int getId(String value)
     {
-      if (value == null) {
-        value = "";
-      }
       final Integer id = falseIds.get(value);
       return id == null ? -1 : id;
     }

@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.server.bridge;
@@ -55,6 +53,10 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 public class DruidClusterBridgeTest
 {
+
+  public static final int WAIT_MAX_RETRY = 100;
+  public static final int WAIT_SLEEP_MILLIS = 200;
+
   @Test
   public void testRun() throws Exception
   {
@@ -193,33 +195,33 @@ public class DruidClusterBridgeTest
 
     int retry = 0;
     while (!bridge.isLeader()) {
-      if (retry > 5) {
+      if (retry > WAIT_MAX_RETRY) {
         throw new ISE("Unable to become leader");
       }
 
-      Thread.sleep(100);
+      Thread.sleep(WAIT_SLEEP_MILLIS);
       retry++;
     }
 
     String path = "/druid/announcements/localhost:8080";
     retry = 0;
     while (remoteCf.checkExists().forPath(path) == null) {
-      if (retry > 5) {
+      if (retry > WAIT_MAX_RETRY) {
         throw new ISE("Unable to announce");
       }
 
-      Thread.sleep(100);
+      Thread.sleep(WAIT_SLEEP_MILLIS);
       retry++;
     }
 
     boolean verified = verifyUpdate(jsonMapper, path, remoteCf);
     retry = 0;
     while (!verified) {
-      if (retry > 5) {
+      if (retry > WAIT_MAX_RETRY) {
         throw new ISE("No updates to bridge node occurred");
       }
 
-      Thread.sleep(100);
+      Thread.sleep(WAIT_SLEEP_MILLIS);
       retry++;
 
       verified = verifyUpdate(jsonMapper, path, remoteCf);

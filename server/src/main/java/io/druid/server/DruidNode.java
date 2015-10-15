@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.server;
@@ -26,18 +24,19 @@ import com.google.common.base.Preconditions;
 import com.google.common.net.HostAndPort;
 import com.google.inject.name.Named;
 import com.metamx.common.IAE;
+import com.metamx.common.ISE;
 import io.druid.common.utils.SocketUtil;
 
 import javax.validation.constraints.Max;
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 
 /**
  */
 public class DruidNode
 {
-  public static final String DEFAULT_HOST = "localhost";
-
   @JsonProperty("service")
   @NotNull
   private String serviceName;
@@ -83,7 +82,7 @@ public class DruidNode
     this.serviceName = serviceName;
 
     if(host == null && port == null) {
-      host = DEFAULT_HOST;
+      host = getDefaultHost();
       port = -1;
     }
     else {
@@ -94,7 +93,7 @@ public class DruidNode
           throw new IAE("Conflicting host:port [%s] and port [%d] settings", host, port);
         }
       } else {
-        hostAndPort = HostAndPort.fromParts(DEFAULT_HOST, port);
+        hostAndPort = HostAndPort.fromParts(getDefaultHost(), port);
       }
 
       host = hostAndPort.getHostText();
@@ -135,6 +134,14 @@ public class DruidNode
       return HostAndPort.fromString(host).toString();
     } else {
       return HostAndPort.fromParts(host, port).toString();
+    }
+  }
+
+  public static String getDefaultHost() {
+    try {
+      return InetAddress.getLocalHost().getCanonicalHostName();
+    } catch(UnknownHostException e) {
+      throw new ISE(e, "Unable to determine host name");
     }
   }
 

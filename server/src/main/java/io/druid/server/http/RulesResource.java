@@ -1,35 +1,41 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.server.http;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.inject.Inject;
+import io.druid.audit.AuditInfo;
+import io.druid.audit.AuditManager;
 import io.druid.metadata.MetadataRuleManager;
 import io.druid.server.coordinator.rules.Rule;
+import org.joda.time.Interval;
 
+import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.Consumes;
+import javax.ws.rs.DefaultValue;
 import javax.ws.rs.GET;
+import javax.ws.rs.HeaderParam;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
 import javax.ws.rs.QueryParam;
+import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import java.util.List;
@@ -40,13 +46,16 @@ import java.util.List;
 public class RulesResource
 {
   private final MetadataRuleManager databaseRuleManager;
+  private final AuditManager auditManager;
 
   @Inject
   public RulesResource(
-      MetadataRuleManager databaseRuleManager
+      MetadataRuleManager databaseRuleManager,
+      AuditManager auditManager
   )
   {
     this.databaseRuleManager = databaseRuleManager;
+    this.auditManager = auditManager;
   }
 
   @GET
@@ -62,7 +71,6 @@ public class RulesResource
   public Response getDatasourceRules(
       @PathParam("dataSourceName") final String dataSourceName,
       @QueryParam("full") final String full
-
   )
   {
     if (full != null) {
@@ -73,17 +81,56 @@ public class RulesResource
                    .build();
   }
 
+  // default value is used for backwards compatibility
   @POST
   @Path("/{dataSourceName}")
   @Consumes(MediaType.APPLICATION_JSON)
   public Response setDatasourceRules(
       @PathParam("dataSourceName") final String dataSourceName,
-      final List<Rule> rules
+      final List<Rule> rules,
+      @HeaderParam(AuditManager.X_DRUID_AUTHOR) @DefaultValue("") final String author,
+      @HeaderParam(AuditManager.X_DRUID_COMMENT) @DefaultValue("") final String comment,
+      @Context HttpServletRequest req
   )
   {
-    if (databaseRuleManager.overrideRule(dataSourceName, rules)) {
+    if (databaseRuleManager.overrideRule(
+        dataSourceName,
+        rules,
+        new AuditInfo(author, comment, req.getRemoteAddr())
+    )) {
       return Response.ok().build();
     }
     return Response.status(Response.Status.INTERNAL_SERVER_ERROR).build();
   }
+
+  @GET
+  @Path("/{dataSourceName}/history")
+  @Produces(MediaType.APPLICATION_JSON)
+  public Response getDatasourceRuleHistory(
+      @PathParam("dataSourceName") final String dataSourceName,
+      @QueryParam("interval") final String interval
+  )
+  {
+    Interval theInterval = interval == null ? null : new Interval(interval);
+    return Response.ok(auditManager.fetchAuditHistory(dataSourceName, "rules", theInterval))
+                   .build();
+  }
+
+  @GET
+  @Path("/history")
+  @Produces(MediaType.APPLICATION_JSON)
+  public Response getDatasourceRuleHistory(
+      @QueryParam("interval") final String interval
+  )
+  {
+    try {
+      Interval theInterval = interval == null ? null : new Interval(interval);
+      return Response.ok(auditManager.fetchAuditHistory("rules", theInterval))
+                     .build();
+    }
+    catch (IllegalArgumentException e) {
+      return Response.serverError().entity(ImmutableMap.<String, Object>of("error", e.getMessage())).build();
+    }
+  }
+
 }

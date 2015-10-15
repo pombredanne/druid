@@ -1,28 +1,26 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.client.cache;
 
-import com.google.common.base.Charsets;
 import com.google.common.base.Preconditions;
 import com.google.common.primitives.Ints;
 import com.metamx.common.StringUtils;
+import com.metamx.emitter.service.ServiceEmitter;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
@@ -34,6 +32,13 @@ public interface Cache
 {
   public byte[] get(NamedKey key);
   public void put(NamedKey key, byte[] value);
+
+  /**
+   * Resulting map should not contain any null values (i.e. cache misses should not be included)
+   *
+   * @param keys
+   * @return
+   */
   public Map<NamedKey, byte[]> getBulk(Iterable<NamedKey> keys);
 
   public void close(String namespace);
@@ -41,6 +46,12 @@ public interface Cache
   public CacheStats getStats();
 
   public boolean isLocal();
+
+  /**
+   * Custom metrics not covered by CacheStats may be emitted by this method.
+   * @param emitter The service emitter to emit on.
+   */
+  public void doMonitor(ServiceEmitter emitter);
 
   public class NamedKey
   {

@@ -1,26 +1,23 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.metadata;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.common.base.Supplier;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -32,13 +29,16 @@ import org.joda.time.Interval;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 
 
 public class MetadataSegmentManagerTest
 {
+  @Rule
+  public final TestDerbyConnector.DerbyConnectorRule derbyConnectorRule = new TestDerbyConnector.DerbyConnectorRule();
+
   private SQLMetadataSegmentManager manager;
-  private TestDerbyConnector connector;
   private final ObjectMapper jsonMapper = new DefaultObjectMapper();
 
   private final DataSegment segment1 = new DataSegment(
@@ -76,23 +76,18 @@ public class MetadataSegmentManagerTest
   @Before
   public void setUp() throws Exception
   {
-    final Supplier<MetadataStorageTablesConfig> dbTables = Suppliers.ofInstance(MetadataStorageTablesConfig.fromBase("test"));
-
-    connector = new TestDerbyConnector(
-        Suppliers.ofInstance(new MetadataStorageConnectorConfig()),
-        dbTables
-    );
+    TestDerbyConnector connector = derbyConnectorRule.getConnector();
 
     manager = new SQLMetadataSegmentManager(
         jsonMapper,
         Suppliers.ofInstance(new MetadataSegmentManagerConfig()),
-        dbTables,
+        derbyConnectorRule.metadataTablesConfigSupplier(),
         connector
     );
 
     SQLMetadataSegmentPublisher publisher = new SQLMetadataSegmentPublisher(
         jsonMapper,
-        dbTables.get(),
+        derbyConnectorRule.metadataTablesConfigSupplier().get(),
         connector
     );
 
@@ -100,12 +95,6 @@ public class MetadataSegmentManagerTest
 
     publisher.publishSegment(segment1);
     publisher.publishSegment(segment2);
-  }
-
-  @After
-  public void tearDown() throws Exception
-  {
-    connector.tearDown();
   }
 
   @Test

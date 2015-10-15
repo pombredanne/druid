@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.query.aggregation.histogram;
@@ -29,8 +27,8 @@ import io.druid.query.QueryRunnerTestHelper;
 import io.druid.query.Result;
 import io.druid.query.TestQueryRunners;
 import io.druid.query.aggregation.AggregatorFactory;
-import io.druid.query.aggregation.MaxAggregatorFactory;
-import io.druid.query.aggregation.MinAggregatorFactory;
+import io.druid.query.aggregation.DoubleMinAggregatorFactory;
+import io.druid.query.aggregation.DoubleMaxAggregatorFactory;
 import io.druid.query.aggregation.PostAggregator;
 import io.druid.query.topn.TopNQuery;
 import io.druid.query.topn.TopNQueryBuilder;
@@ -56,38 +54,35 @@ import java.util.Map;
 public class ApproximateHistogramTopNQueryTest
 {
   @Parameterized.Parameters
-  public static Collection<?> constructorFeeder() throws IOException
+  public static Iterable<Object[]> constructorFeeder() throws IOException
   {
-    List<Object> retVal = Lists.newArrayList();
-    retVal.addAll(
-        QueryRunnerTestHelper.makeQueryRunners(
-            new TopNQueryRunnerFactory(
-                TestQueryRunners.getPool(),
-                new TopNQueryQueryToolChest(new TopNQueryConfig()),
-                QueryRunnerTestHelper.NOOP_QUERYWATCHER
+    return QueryRunnerTestHelper.transformToConstructionFeeder(
+        Iterables.concat(
+            QueryRunnerTestHelper.makeQueryRunners(
+                new TopNQueryRunnerFactory(
+                    TestQueryRunners.getPool(),
+                    new TopNQueryQueryToolChest(new TopNQueryConfig(), QueryRunnerTestHelper.NoopIntervalChunkingQueryRunnerDecorator()),
+                    QueryRunnerTestHelper.NOOP_QUERYWATCHER
+                )
+            ),
+            QueryRunnerTestHelper.makeQueryRunners(
+                new TopNQueryRunnerFactory(
+                    new StupidPool<ByteBuffer>(
+                        new Supplier<ByteBuffer>()
+                        {
+                          @Override
+                          public ByteBuffer get()
+                          {
+                            return ByteBuffer.allocate(2000);
+                          }
+                        }
+                    ),
+                    new TopNQueryQueryToolChest(new TopNQueryConfig(), QueryRunnerTestHelper.NoopIntervalChunkingQueryRunnerDecorator()),
+                    QueryRunnerTestHelper.NOOP_QUERYWATCHER
+                )
             )
         )
     );
-    retVal.addAll(
-        QueryRunnerTestHelper.makeQueryRunners(
-            new TopNQueryRunnerFactory(
-                new StupidPool<ByteBuffer>(
-                    new Supplier<ByteBuffer>()
-                    {
-                      @Override
-                      public ByteBuffer get()
-                      {
-                        return ByteBuffer.allocate(2000);
-                      }
-                    }
-                ),
-                new TopNQueryQueryToolChest(new TopNQueryConfig()),
-                QueryRunnerTestHelper.NOOP_QUERYWATCHER
-            )
-        )
-    );
-
-    return retVal;
   }
 
   private final QueryRunner runner;
@@ -123,8 +118,8 @@ public class ApproximateHistogramTopNQueryTest
                 Iterables.concat(
                     QueryRunnerTestHelper.commonAggregators,
                     Lists.newArrayList(
-                        new MaxAggregatorFactory("maxIndex", "index"),
-                        new MinAggregatorFactory("minIndex", "index"),
+                        new DoubleMaxAggregatorFactory("maxIndex", "index"),
+                        new DoubleMinAggregatorFactory("minIndex", "index"),
                         factory
                     )
                 )

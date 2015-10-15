@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2014  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.query.groupby;
@@ -25,6 +23,8 @@ import com.metamx.common.ISE;
 import com.metamx.common.Pair;
 import com.metamx.common.guava.Accumulator;
 import io.druid.collections.StupidPool;
+import io.druid.data.input.MapBasedInputRow;
+import io.druid.data.input.MapBasedRow;
 import io.druid.data.input.Row;
 import io.druid.data.input.Rows;
 import io.druid.granularity.QueryGranularity;
@@ -36,7 +36,10 @@ import io.druid.segment.incremental.OffheapIncrementalIndex;
 import io.druid.segment.incremental.OnheapIncrementalIndex;
 
 import java.nio.ByteBuffer;
+import java.util.Collections;
 import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class GroupByQueryHelper
 {
@@ -106,10 +109,18 @@ public class GroupByQueryHelper
       public IncrementalIndex accumulate(IncrementalIndex accumulated, T in)
       {
 
-        if (in instanceof Row) {
+        if (in instanceof MapBasedRow) {
           try {
-            accumulated.add(Rows.toCaseInsensitiveInputRow((Row) in, dimensions));
-          } catch(IndexSizeExceededException e) {
+            MapBasedRow row = (MapBasedRow) in;
+            accumulated.add(
+                new MapBasedInputRow(
+                    row.getTimestamp(),
+                    dimensions,
+                    row.getEvent()
+                )
+            );
+          }
+          catch (IndexSizeExceededException e) {
             throw new ISE(e.getMessage());
           }
         } else {
@@ -122,15 +133,19 @@ public class GroupByQueryHelper
     return new Pair<>(index, accumulator);
   }
 
-  public static <T> Pair<List, Accumulator<List, T>> createBySegmentAccumulatorPair()
+  public static <T> Pair<Queue, Accumulator<Queue, T>> createBySegmentAccumulatorPair()
   {
-    List init = Lists.newArrayList();
-    Accumulator<List, T> accumulator = new Accumulator<List, T>()
+    // In parallel query runner multiple threads add to this queue concurrently
+    Queue init = new ConcurrentLinkedQueue<>();
+    Accumulator<Queue, T> accumulator = new Accumulator<Queue, T>()
     {
       @Override
-      public List accumulate(List accumulated, T in)
+      public Queue accumulate(Queue accumulated, T in)
       {
-        accumulated.add(in);
+        if(in == null){
+          throw new ISE("Cannot have null result");
+        }
+        accumulated.offer(in);
         return accumulated;
       }
     };

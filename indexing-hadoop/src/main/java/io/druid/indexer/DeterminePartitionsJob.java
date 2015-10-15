@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.indexer;
@@ -63,7 +61,6 @@ import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.TaskInputOutputContext;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.mapreduce.lib.input.SequenceFileInputFormat;
-import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.mapreduce.lib.output.SequenceFileOutputFormat;
 import org.joda.time.DateTime;
@@ -81,13 +78,13 @@ import java.util.Map;
 /**
  * Determines appropriate ShardSpecs for a job by determining whether or not partitioning is necessary, and if so,
  * choosing the best dimension that satisfies the criteria:
- * 
+ * <p/>
  * <ul>
  * <li>Must have exactly one value per row.</li>
  * <li>Must not generate oversized partitions. A dimension with N rows having the same value will necessarily
  * put all those rows in the same partition, and that partition may be much larger than the target size.</li>
  * </ul>
- * 
+ * <p/>
  * "Best" means a very high cardinality dimension, or, if none exist, the dimension that minimizes variation of
  * segment size relative to the target.
  */
@@ -123,13 +120,14 @@ public class DeterminePartitionsJob implements Jobby
       }
 
       if (!config.getPartitionsSpec().isAssumeGrouped()) {
-        final Job groupByJob = new Job(
+        final Job groupByJob = Job.getInstance(
             new Configuration(),
             String.format("%s-determine_partitions_groupby-%s", config.getDataSource(), config.getIntervals())
         );
 
         JobHelper.injectSystemProperties(groupByJob);
-        groupByJob.setInputFormatClass(TextInputFormat.class);
+        config.addJobProperties(groupByJob);
+
         groupByJob.setMapperClass(DeterminePartitionsGroupByMapper.class);
         groupByJob.setMapOutputKeyClass(BytesWritable.class);
         groupByJob.setMapOutputValueClass(NullWritable.class);
@@ -138,10 +136,9 @@ public class DeterminePartitionsJob implements Jobby
         groupByJob.setOutputKeyClass(BytesWritable.class);
         groupByJob.setOutputValueClass(NullWritable.class);
         groupByJob.setOutputFormatClass(SequenceFileOutputFormat.class);
-        JobHelper.setupClasspath(config, groupByJob);
+        JobHelper.setupClasspath(JobHelper.distributedClassPath(config.getWorkingPath()), groupByJob);
 
         config.addInputPaths(groupByJob);
-        config.addJobProperties(groupByJob);
         config.intoConfiguration(groupByJob);
         FileOutputFormat.setOutputPath(groupByJob, config.makeGroupedDataDir());
 
@@ -159,7 +156,7 @@ public class DeterminePartitionsJob implements Jobby
       /*
        * Read grouped data and determine appropriate partitions.
        */
-      final Job dimSelectionJob = new Job(
+      final Job dimSelectionJob = Job.getInstance(
           new Configuration(),
           String.format("%s-determine_partitions_dimselection-%s", config.getDataSource(), config.getIntervals())
       );
@@ -167,6 +164,7 @@ public class DeterminePartitionsJob implements Jobby
       dimSelectionJob.getConfiguration().set("io.sort.record.percent", "0.19");
 
       JobHelper.injectSystemProperties(dimSelectionJob);
+      config.addJobProperties(dimSelectionJob);
 
       if (!config.getPartitionsSpec().isAssumeGrouped()) {
         // Read grouped data from the groupByJob.
@@ -176,7 +174,6 @@ public class DeterminePartitionsJob implements Jobby
       } else {
         // Directly read the source data, since we assume it's already grouped.
         dimSelectionJob.setMapperClass(DeterminePartitionsDimSelectionAssumeGroupedMapper.class);
-        dimSelectionJob.setInputFormatClass(TextInputFormat.class);
         config.addInputPaths(dimSelectionJob);
       }
 
@@ -189,9 +186,8 @@ public class DeterminePartitionsJob implements Jobby
       dimSelectionJob.setOutputFormatClass(DeterminePartitionsDimSelectionOutputFormat.class);
       dimSelectionJob.setPartitionerClass(DeterminePartitionsDimSelectionPartitioner.class);
       dimSelectionJob.setNumReduceTasks(config.getGranularitySpec().bucketIntervals().get().size());
-      JobHelper.setupClasspath(config, dimSelectionJob);
+      JobHelper.setupClasspath(JobHelper.distributedClassPath(config.getWorkingPath()), dimSelectionJob);
 
-      config.addJobProperties(dimSelectionJob);
       config.intoConfiguration(dimSelectionJob);
       FileOutputFormat.setOutputPath(dimSelectionJob, config.makeIntermediatePath());
 
@@ -223,8 +219,8 @@ public class DeterminePartitionsJob implements Jobby
         if (Utils.exists(dimSelectionJob, fileSystem, partitionInfoPath)) {
           List<ShardSpec> specs = config.jsonMapper.readValue(
               Utils.openInputStream(dimSelectionJob, partitionInfoPath), new TypeReference<List<ShardSpec>>()
-          {
-          }
+              {
+              }
           );
 
           List<HadoopyShardSpec> actualSpecs = Lists.newArrayListWithExpectedSize(specs.size());
@@ -262,7 +258,7 @@ public class DeterminePartitionsJob implements Jobby
     @Override
     protected void innerMap(
         InputRow inputRow,
-        Text text,
+        Object value,
         Context context
     ) throws IOException, InterruptedException
     {
@@ -343,7 +339,7 @@ public class DeterminePartitionsJob implements Jobby
     @Override
     protected void innerMap(
         InputRow inputRow,
-        Text text,
+        Object value,
         Context context
     ) throws IOException, InterruptedException
     {
@@ -381,7 +377,7 @@ public class DeterminePartitionsJob implements Jobby
     }
 
     public void emitDimValueCounts(
-        TaskInputOutputContext<? extends Writable, ? extends Writable, BytesWritable, Text> context,
+        TaskInputOutputContext<?, ?, BytesWritable, Text> context,
         DateTime timestamp,
         Map<String, Iterable<String>> dims
     ) throws IOException, InterruptedException
@@ -463,7 +459,7 @@ public class DeterminePartitionsJob implements Jobby
   private static abstract class DeterminePartitionsDimSelectionBaseReducer
       extends Reducer<BytesWritable, Text, BytesWritable, Text>
   {
-    protected static volatile HadoopDruidIndexerConfig config = null;
+    protected volatile HadoopDruidIndexerConfig config = null;
 
     @Override
     protected void setup(Context context)
@@ -758,13 +754,13 @@ public class DeterminePartitionsJob implements Jobby
 
       final List<ShardSpec> chosenShardSpecs = Lists.transform(
           chosenPartitions.partitions, new Function<DimPartition, ShardSpec>()
-      {
-        @Override
-        public ShardSpec apply(DimPartition dimPartition)
-        {
-          return dimPartition.shardSpec;
-        }
-      }
+          {
+            @Override
+            public ShardSpec apply(DimPartition dimPartition)
+            {
+              return dimPartition.shardSpec;
+            }
+          }
       );
 
       log.info("Chosen partitions:");
@@ -774,12 +770,12 @@ public class DeterminePartitionsJob implements Jobby
 
       try {
         HadoopDruidIndexerConfig.jsonMapper
-                                .writerWithType(
-                                    new TypeReference<List<ShardSpec>>()
-                                    {
-                                    }
-                                )
-                                .writeValue(out, chosenShardSpecs);
+            .writerWithType(
+                new TypeReference<List<ShardSpec>>()
+                {
+                }
+            )
+            .writeValue(out, chosenShardSpecs);
       }
       finally {
         Closeables.close(out, false);
@@ -894,7 +890,7 @@ public class DeterminePartitionsJob implements Jobby
   }
 
   private static void write(
-      TaskInputOutputContext<? extends Writable, ? extends Writable, BytesWritable, Text> context,
+      TaskInputOutputContext<?, ?, BytesWritable, Text> context,
       final byte[] groupKey,
       DimValueCount dimValueCount
   )

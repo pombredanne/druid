@@ -1,24 +1,23 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.indexer;
 
+import com.fasterxml.jackson.databind.InjectableValues;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
@@ -47,7 +46,11 @@ import java.util.List;
  */
 public class HadoopDruidIndexerConfigTest
 {
-  private static final ObjectMapper jsonMapper = new DefaultObjectMapper();
+  private static final ObjectMapper jsonMapper;
+  static {
+    jsonMapper = new DefaultObjectMapper();
+    jsonMapper.setInjectableValues(new InjectableValues.Std().addValue(ObjectMapper.class, jsonMapper));
+  }
 
   public static <T> T jsonReadWriteRead(String s, Class<T> klass)
   {
@@ -98,7 +101,14 @@ public class HadoopDruidIndexerConfigTest
     );
 
     Bucket bucket = new Bucket(4711, new DateTime(2012, 07, 10, 5, 30), 4712);
-    Path path = cfg.makeSegmentOutputPath(new DistributedFileSystem(), bucket);
+    Path path = JobHelper.makeSegmentOutputPath(
+        new Path(cfg.getSchema().getIOConfig().getSegmentOutputPath()),
+        new DistributedFileSystem(),
+        cfg.getSchema().getDataSchema().getDataSource(),
+        cfg.getSchema().getTuningConfig().getVersion(),
+        cfg.getSchema().getDataSchema().getGranularitySpec().bucketInterval(bucket.time).get(),
+        bucket.partitionNum
+    );
     Assert.assertEquals(
         "hdfs://server:9100/tmp/druid/datatest/source/20120710T050000.000Z_20120710T060000.000Z/some_brand_new_version/4712",
         path.toString()
@@ -144,9 +154,16 @@ public class HadoopDruidIndexerConfigTest
     );
 
     Bucket bucket = new Bucket(4711, new DateTime(2012, 07, 10, 5, 30), 4712);
-    Path path = cfg.makeSegmentOutputPath(new LocalFileSystem(), bucket);
+    Path path = JobHelper.makeSegmentOutputPath(
+        new Path(cfg.getSchema().getIOConfig().getSegmentOutputPath()),
+        new LocalFileSystem(),
+        cfg.getSchema().getDataSchema().getDataSource(),
+        cfg.getSchema().getTuningConfig().getVersion(),
+        cfg.getSchema().getDataSchema().getGranularitySpec().bucketInterval(bucket.time).get(),
+        bucket.partitionNum
+    );
     Assert.assertEquals(
-        "/tmp/dru:id/data:test/the:data:source/2012-07-10T05:00:00.000Z_2012-07-10T06:00:00.000Z/some:brand:new:version/4712",
+        "file:/tmp/dru:id/data:test/the:data:source/2012-07-10T05:00:00.000Z_2012-07-10T06:00:00.000Z/some:brand:new:version/4712",
         path.toString()
     );
 
@@ -163,18 +180,24 @@ public class HadoopDruidIndexerConfigTest
 
     HadoopIngestionSpec spec = new HadoopIngestionSpec(
         new DataSchema(
-            "foo", null, new AggregatorFactory[0], new UniformGranularitySpec(
-            Granularity.MINUTE,
-            QueryGranularity.MINUTE,
-            ImmutableList.of(new Interval("2010-01-01/P1D"))
-        )
-        ), new HadoopIOConfig(ImmutableMap.<String, Object>of("paths", "bar", "type", "static"), null, null),
+            "foo",
+            null,
+            new AggregatorFactory[0],
+            new UniformGranularitySpec(
+                Granularity.MINUTE,
+                QueryGranularity.MINUTE,
+                ImmutableList.of(new Interval("2010-01-01/P1D"))
+            ),
+            jsonMapper
+        ),
+        new HadoopIOConfig(ImmutableMap.<String, Object>of("paths", "bar", "type", "static"), null, null),
         new HadoopTuningConfig(
             null,
             null,
             null,
             ImmutableMap.of(new DateTime("2010-01-01T01:00:00"), specs),
             null,
+            null,
             false,
             false,
             false,
@@ -184,7 +207,8 @@ public class HadoopDruidIndexerConfigTest
             false,
             false,
             null,
-            null
+            null,
+            false
         )
     );
     HadoopDruidIndexerConfig config = HadoopDruidIndexerConfig.fromSpec(spec);

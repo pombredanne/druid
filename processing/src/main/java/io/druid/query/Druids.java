@@ -1,28 +1,32 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.query;
 
+import com.google.common.base.Function;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import io.druid.granularity.QueryGranularity;
 import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.query.aggregation.PostAggregator;
+import io.druid.query.datasourcemetadata.DataSourceMetadataQuery;
+import io.druid.query.dimension.DefaultDimensionSpec;
+import io.druid.query.dimension.DimensionSpec;
 import io.druid.query.filter.AndDimFilter;
 import io.druid.query.filter.DimFilter;
 import io.druid.query.filter.NoopDimFilter;
@@ -45,6 +49,7 @@ import io.druid.query.timeseries.TimeseriesQuery;
 import org.joda.time.DateTime;
 import org.joda.time.Interval;
 
+import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Map;
 
@@ -52,6 +57,16 @@ import java.util.Map;
  */
 public class Druids
 {
+  public static final Function<String, DimensionSpec> DIMENSION_IDENTITY = new Function<String, DimensionSpec>()
+  {
+    @Nullable
+    @Override
+    public DimensionSpec apply(String input)
+    {
+      return new DefaultDimensionSpec(input, input);
+    }
+  };
+
   private Druids()
   {
     throw new AssertionError();
@@ -61,7 +76,7 @@ public class Druids
    * A Builder for AndDimFilter.
    *
    * Required: fields() must be called before build()
-   * 
+   *
    * Usage example:
    * <pre><code>
    *   AndDimFilter andDimFilter = Druids.newAndDimFilterBuilder()
@@ -105,9 +120,9 @@ public class Druids
 
   /**
    * A Builder for OrDimFilter.
-   * 
+   *
    * Required: fields() must be called before build()
-   * 
+   *
    * Usage example:
    * <pre><code>
    *   OrDimFilter orDimFilter = Druids.newOrDimFilterBuilder()
@@ -160,9 +175,9 @@ public class Druids
 
   /**
    * A Builder for NotDimFilter.
-   * 
+   *
    * Required: field() must be called before build()
-   * 
+   *
    * Usage example:
    * <pre><code>
    *   NotDimFilter notDimFilter = Druids.newNotDimFilterBuilder()
@@ -206,9 +221,9 @@ public class Druids
 
   /**
    * A Builder for SelectorDimFilter.
-   * 
+   *
    * Required: dimension() and value() must be called before build()
-   * 
+   *
    * Usage example:
    * <pre><code>
    *   Selector selDimFilter = Druids.newSelectorDimFilterBuilder()
@@ -285,10 +300,10 @@ public class Druids
 
   /**
    * A Builder for TimeseriesQuery.
-   * 
+   *
    * Required: dataSource(), intervals(), and aggregators() must be called before build()
    * Optional: filters(), granularity(), postAggregators(), and context() can be called before build()
-   * 
+   *
    * Usage example:
    * <pre><code>
    *   TimeseriesQuery query = Druids.newTimeseriesQueryBuilder()
@@ -483,11 +498,11 @@ public class Druids
 
   /**
    * A Builder for SearchQuery.
-   * 
+   *
    * Required: dataSource(), intervals(), dimensions() and query() must be called before build()
-   * 
+   *
    * Optional: filters(), granularity(), and context() can be called before build()
-   * 
+   *
    * Usage example:
    * <pre><code>
    *   SearchQuery query = Druids.newSearchQueryBuilder()
@@ -507,7 +522,7 @@ public class Druids
     private QueryGranularity granularity;
     private int limit;
     private QuerySegmentSpec querySegmentSpec;
-    private List<String> dimensions;
+    private List<DimensionSpec> dimensions;
     private SearchQuerySpec querySpec;
     private Map<String, Object> context;
 
@@ -636,11 +651,23 @@ public class Druids
 
     public SearchQueryBuilder dimensions(String d)
     {
+      dimensions = ImmutableList.of(DIMENSION_IDENTITY.apply(d));
+      return this;
+    }
+
+    public SearchQueryBuilder dimensions(Iterable<String> d)
+    {
+      dimensions = ImmutableList.copyOf(Iterables.transform(d, DIMENSION_IDENTITY));
+      return this;
+    }
+
+    public SearchQueryBuilder dimensions(DimensionSpec d)
+    {
       dimensions = Lists.newArrayList(d);
       return this;
     }
 
-    public SearchQueryBuilder dimensions(List<String> d)
+    public SearchQueryBuilder dimensions(List<DimensionSpec> d)
     {
       dimensions = d;
       return this;
@@ -678,9 +705,9 @@ public class Druids
 
   /**
    * A Builder for TimeBoundaryQuery.
-   * 
+   *
    * Required: dataSource() must be called before build()
-   * 
+   *
    * Usage example:
    * <pre><code>
    *   TimeBoundaryQuery query = new MaxTimeQueryBuilder()
@@ -774,9 +801,9 @@ public class Druids
 
   /**
    * A Builder for Result.
-   * 
+   *
    * Required: timestamp() and value() must be called before build()
-   * 
+   *
    * Usage example:
    * <pre><code>
    *   Result&lt;T&gt; result = Druids.newResultBuilder()
@@ -840,9 +867,9 @@ public class Druids
 
   /**
    * A Builder for SegmentMetadataQuery.
-   * 
+   *
    * Required: dataSource(), intervals() must be called before build()
-   * 
+   *
    * Usage example:
    * <pre><code>
    *   SegmentMetadataQuery query = new SegmentMetadataQueryBuilder()
@@ -877,7 +904,9 @@ public class Druids
           querySegmentSpec,
           toInclude,
           merge,
-          context
+          context,
+          null,
+          false
       );
     }
 
@@ -948,9 +977,9 @@ public class Druids
 
   /**
    * A Builder for SelectQuery.
-   * 
+   *
    * Required: dataSource(), intervals() must be called before build()
-   * 
+   *
    * Usage example:
    * <pre><code>
    *   SelectQuery query = new SelectQueryBuilder()
@@ -1098,5 +1127,91 @@ public class Druids
   public static SelectQueryBuilder newSelectQueryBuilder()
   {
     return new SelectQueryBuilder();
+  }
+
+  /**
+   * A Builder for DataSourceMetadataQuery.
+   *
+   * Required: dataSource() must be called before build()
+   *
+   * Usage example:
+   * <pre><code>
+   *   DataSourceMetadataQueryBuilder query = new DataSourceMetadataQueryBuilder()
+   *                                  .dataSource("Example")
+   *                                  .build();
+   * </code></pre>
+   *
+   * @see io.druid.query.datasourcemetadata.DataSourceMetadataQuery
+   */
+  public static class DataSourceMetadataQueryBuilder
+  {
+    private DataSource dataSource;
+    private QuerySegmentSpec querySegmentSpec;
+    private Map<String, Object> context;
+
+    public DataSourceMetadataQueryBuilder()
+    {
+      dataSource = null;
+      querySegmentSpec = null;
+      context = null;
+    }
+
+    public DataSourceMetadataQuery build()
+    {
+      return new DataSourceMetadataQuery(
+          dataSource,
+          querySegmentSpec,
+          context
+      );
+    }
+
+    public DataSourceMetadataQueryBuilder copy(DataSourceMetadataQueryBuilder builder)
+    {
+      return new DataSourceMetadataQueryBuilder()
+          .dataSource(builder.dataSource)
+          .intervals(builder.querySegmentSpec)
+          .context(builder.context);
+    }
+
+    public DataSourceMetadataQueryBuilder dataSource(String ds)
+    {
+      dataSource = new TableDataSource(ds);
+      return this;
+    }
+
+    public DataSourceMetadataQueryBuilder dataSource(DataSource ds)
+    {
+      dataSource = ds;
+      return this;
+    }
+
+    public DataSourceMetadataQueryBuilder intervals(QuerySegmentSpec q)
+    {
+      querySegmentSpec = q;
+      return this;
+    }
+
+    public DataSourceMetadataQueryBuilder intervals(String s)
+    {
+      querySegmentSpec = new LegacySegmentSpec(s);
+      return this;
+    }
+
+    public DataSourceMetadataQueryBuilder intervals(List<Interval> l)
+    {
+      querySegmentSpec = new LegacySegmentSpec(l);
+      return this;
+    }
+
+    public DataSourceMetadataQueryBuilder context(Map<String, Object> c)
+    {
+      context = c;
+      return this;
+    }
+  }
+
+  public static DataSourceMetadataQueryBuilder newDataSourceMetadataQueryBuilder()
+  {
+    return new DataSourceMetadataQueryBuilder();
   }
 }

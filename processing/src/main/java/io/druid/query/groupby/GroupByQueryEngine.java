@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.query.groupby;
@@ -44,7 +42,6 @@ import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.query.aggregation.BufferAggregator;
 import io.druid.query.aggregation.PostAggregator;
 import io.druid.query.dimension.DimensionSpec;
-import io.druid.query.extraction.DimExtractionFn;
 import io.druid.segment.Cursor;
 import io.druid.segment.DimensionSelector;
 import io.druid.segment.StorageAdapter;
@@ -62,7 +59,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
-import java.util.TreeMap;
 
 /**
  */
@@ -148,7 +144,9 @@ public class GroupByQueryEngine
     private final BufferAggregator[] aggregators;
     private final PositionMaintainer positionMaintainer;
 
-    private final TreeMap<ByteBuffer, Integer> positions;
+    private final Map<ByteBuffer, Integer> positions = Maps.newTreeMap();
+    // GroupBy queries tend to do a lot of reads from this. We co-store a hash map to make those reads go faster.
+    private final Map<ByteBuffer, Integer> positionsHash = Maps.newHashMap();
 
     public RowUpdater(
         ByteBuffer metricValues,
@@ -159,8 +157,6 @@ public class GroupByQueryEngine
       this.metricValues = metricValues;
       this.aggregators = aggregators;
       this.positionMaintainer = positionMaintainer;
-
-      this.positions = Maps.newTreeMap();
     }
 
     public int getNumRows()
@@ -168,7 +164,7 @@ public class GroupByQueryEngine
       return positions.size();
     }
 
-    public TreeMap<ByteBuffer, Integer> getPositions()
+    public Map<ByteBuffer, Integer> getPositions()
     {
       return positions;
     }
@@ -204,7 +200,7 @@ public class GroupByQueryEngine
         return retVal;
       } else {
         key.clear();
-        Integer position = positions.get(key);
+        Integer position = positionsHash.get(key);
         int[] increments = positionMaintainer.getIncrements();
         int thePosition;
 
@@ -219,6 +215,7 @@ public class GroupByQueryEngine
           }
 
           positions.put(keyCopy, position);
+          positionsHash.put(keyCopy, position);
           thePosition = position;
           for (int i = 0; i < aggregators.length; ++i) {
             aggregators[i].init(metricValues, thePosition);
@@ -302,7 +299,7 @@ public class GroupByQueryEngine
     private List<ByteBuffer> unprocessedKeys;
     private Iterator<Row> delegate;
 
-    public RowIterator(GroupByQuery query, Cursor cursor, ByteBuffer metricsBuffer, GroupByQueryConfig config)
+    public RowIterator(GroupByQuery query, final Cursor cursor, ByteBuffer metricsBuffer, GroupByQueryConfig config)
     {
       this.query = query;
       this.cursor = cursor;
@@ -314,9 +311,13 @@ public class GroupByQueryEngine
       dimensionSpecs = query.getDimensions();
       dimensions = Lists.newArrayListWithExpectedSize(dimensionSpecs.size());
       dimNames = Lists.newArrayListWithExpectedSize(dimensionSpecs.size());
+
       for (int i = 0; i < dimensionSpecs.size(); ++i) {
         final DimensionSpec dimSpec = dimensionSpecs.get(i);
-        final DimensionSelector selector = cursor.makeDimensionSelector(dimSpec.getDimension());
+        final DimensionSelector selector = cursor.makeDimensionSelector(
+            dimSpec.getDimension(),
+            dimSpec.getExtractionFn()
+        );
         if (selector != null) {
           dimensions.add(selector);
           dimNames.add(dimSpec.getOutputName());
@@ -363,11 +364,11 @@ public class GroupByQueryEngine
         }
         cursor.advance();
       }
-      while (!cursor.isDone()) {
+      while (!cursor.isDone() && rowUpdater.getNumRows() < config.getMaxIntermediateRows()) {
         ByteBuffer key = ByteBuffer.allocate(dimensions.size() * Ints.BYTES);
 
         unprocessedKeys = rowUpdater.updateValues(key, dimensions);
-        if (unprocessedKeys != null || rowUpdater.getNumRows() > config.getMaxIntermediateRows()) {
+        if (unprocessedKeys != null) {
           break;
         }
 
@@ -397,14 +398,9 @@ public class GroupByQueryEngine
                   ByteBuffer keyBuffer = input.getKey().duplicate();
                   for (int i = 0; i < dimensions.size(); ++i) {
                     final DimensionSelector dimSelector = dimensions.get(i);
-                    final DimExtractionFn fn = dimensionSpecs.get(i).getDimExtractionFn();
                     final int dimVal = keyBuffer.getInt();
                     if (dimSelector.getValueCardinality() != dimVal) {
-                      if (fn != null) {
-                        theEvent.put(dimNames.get(i), fn.apply(dimSelector.lookupName(dimVal)));
-                      } else {
-                        theEvent.put(dimNames.get(i), dimSelector.lookupName(dimVal));
-                      }
+                      theEvent.put(dimNames.get(i), dimSelector.lookupName(dimVal));
                     }
                   }
 

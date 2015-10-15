@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.indexing.overlord.autoscaling;
@@ -24,13 +22,13 @@ import com.google.common.base.Joiner;
 import com.google.common.base.Predicate;
 import com.google.common.base.Supplier;
 import com.google.common.collect.Collections2;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import com.google.inject.Inject;
 import com.metamx.common.ISE;
 import com.metamx.emitter.EmittingLogger;
+import io.druid.indexing.overlord.RemoteTaskRunner;
 import io.druid.indexing.overlord.RemoteTaskRunnerWorkItem;
 import io.druid.indexing.overlord.TaskRunnerWorkItem;
 import io.druid.indexing.overlord.ZkWorker;
@@ -72,12 +70,14 @@ public class SimpleResourceManagementStrategy implements ResourceManagementStrat
   }
 
   @Override
-  public boolean doProvision(Collection<RemoteTaskRunnerWorkItem> pendingTasks, Collection<ZkWorker> zkWorkers)
+  public boolean doProvision(RemoteTaskRunner runner)
   {
+    Collection<RemoteTaskRunnerWorkItem> pendingTasks = runner.getPendingTasks();
+    Collection<ZkWorker> zkWorkers = runner.getWorkers();
     synchronized (lock) {
       boolean didProvision = false;
       final WorkerBehaviorConfig workerConfig = workerConfigRef.get();
-      if (workerConfig == null) {
+      if (workerConfig == null || workerConfig.getAutoScaler() == null) {
         log.warn("No workerConfig available, cannot provision new workers.");
         return false;
       }
@@ -139,8 +139,9 @@ public class SimpleResourceManagementStrategy implements ResourceManagementStrat
   }
 
   @Override
-  public boolean doTerminate(Collection<RemoteTaskRunnerWorkItem> pendingTasks, Collection<ZkWorker> zkWorkers)
+  public boolean doTerminate(RemoteTaskRunner runner)
   {
+    Collection<RemoteTaskRunnerWorkItem> pendingTasks = runner.getPendingTasks();
     synchronized (lock) {
       final WorkerBehaviorConfig workerConfig = workerConfigRef.get();
       if (workerConfig == null) {
@@ -153,7 +154,7 @@ public class SimpleResourceManagementStrategy implements ResourceManagementStrat
           workerConfig.getAutoScaler().ipToIdLookup(
               Lists.newArrayList(
                   Iterables.transform(
-                      zkWorkers,
+                      runner.getLazyWorkers(),
                       new Function<ZkWorker, String>()
                       {
                         @Override
@@ -176,28 +177,26 @@ public class SimpleResourceManagementStrategy implements ResourceManagementStrat
       currentlyTerminating.clear();
       currentlyTerminating.addAll(stillExisting);
 
-      updateTargetWorkerCount(workerConfig, pendingTasks, zkWorkers);
+      Collection<ZkWorker> workers = runner.getWorkers();
+      updateTargetWorkerCount(workerConfig, pendingTasks, workers);
 
-      final Predicate<ZkWorker> isLazyWorker = createLazyWorkerPredicate(config);
       if (currentlyTerminating.isEmpty()) {
-        final int excessWorkers = (zkWorkers.size() + currentlyProvisioning.size()) - targetWorkerCount;
-        if (excessWorkers > 0) {
-          final List<String> laziestWorkerIps =
-              FluentIterable.from(zkWorkers)
-                            .filter(isLazyWorker)
-                            .limit(excessWorkers)
-                            .transform(
-                                new Function<ZkWorker, String>()
-                                {
-                                  @Override
-                                  public String apply(ZkWorker zkWorker)
-                                  {
-                                    return zkWorker.getWorker().getIp();
-                                  }
-                                }
-                            )
-                            .toList();
 
+        final int excessWorkers = (workers.size() + currentlyProvisioning.size()) - targetWorkerCount;
+        if (excessWorkers > 0) {
+          final Predicate<ZkWorker> isLazyWorker = createLazyWorkerPredicate(config);
+          final List<String> laziestWorkerIps =
+              Lists.transform(
+                  runner.markWorkersLazy(isLazyWorker, excessWorkers),
+                  new Function<ZkWorker, String>()
+                  {
+                    @Override
+                    public String apply(ZkWorker zkWorker)
+                    {
+                      return zkWorker.getWorker().getIp();
+                    }
+                  }
+              );
           if (laziestWorkerIps.isEmpty()) {
             log.info("Wanted to terminate %,d workers, but couldn't find any lazy ones!", excessWorkers);
           } else {
@@ -255,7 +254,7 @@ public class SimpleResourceManagementStrategy implements ResourceManagementStrat
       {
         final boolean itHasBeenAWhile = System.currentTimeMillis() - worker.getLastCompletedTaskTime().getMillis()
                                         >= config.getWorkerIdleTimeout().toStandardDuration().getMillis();
-        return worker.getRunningTasks().isEmpty() && (itHasBeenAWhile || !isValidWorker.apply(worker));
+        return itHasBeenAWhile || !isValidWorker.apply(worker);
       }
     };
   }

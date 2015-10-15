@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.indexer;
@@ -25,6 +23,8 @@ import com.fasterxml.jackson.annotation.JsonTypeName;
 import com.google.common.collect.ImmutableMap;
 import io.druid.indexer.partitions.HashedPartitionsSpec;
 import io.druid.indexer.partitions.PartitionsSpec;
+import io.druid.segment.IndexSpec;
+import io.druid.segment.data.BitmapSerde;
 import io.druid.segment.indexing.TuningConfig;
 import org.joda.time.DateTime;
 
@@ -38,9 +38,11 @@ public class HadoopTuningConfig implements TuningConfig
 {
   private static final PartitionsSpec DEFAULT_PARTITIONS_SPEC = HashedPartitionsSpec.makeDefaultHashedPartitionsSpec();
   private static final Map<DateTime, List<HadoopyShardSpec>> DEFAULT_SHARD_SPECS = ImmutableMap.<DateTime, List<HadoopyShardSpec>>of();
+  private static final IndexSpec DEFAULT_INDEX_SPEC = new IndexSpec();
   private static final int DEFAULT_ROW_FLUSH_BOUNDARY = 80000;
   private static final int DEFAULT_BUFFER_SIZE = 128 * 1024 * 1024;
   private static final float DEFAULT_AGG_BUFFER_RATIO = 0.5f;
+  private static final boolean DEFAULT_USE_COMBINER = false;
 
   public static HadoopTuningConfig makeDefaultTuningConfig()
   {
@@ -49,6 +51,7 @@ public class HadoopTuningConfig implements TuningConfig
         new DateTime().toString(),
         DEFAULT_PARTITIONS_SPEC,
         DEFAULT_SHARD_SPECS,
+        DEFAULT_INDEX_SPEC,
         DEFAULT_ROW_FLUSH_BOUNDARY,
         false,
         true,
@@ -59,7 +62,8 @@ public class HadoopTuningConfig implements TuningConfig
         false,
         false,
         DEFAULT_BUFFER_SIZE,
-        DEFAULT_AGG_BUFFER_RATIO
+        DEFAULT_AGG_BUFFER_RATIO,
+        DEFAULT_USE_COMBINER
     );
   }
 
@@ -67,6 +71,7 @@ public class HadoopTuningConfig implements TuningConfig
   private final String version;
   private final PartitionsSpec partitionsSpec;
   private final Map<DateTime, List<HadoopyShardSpec>> shardSpecs;
+  private final IndexSpec indexSpec;
   private final int rowFlushBoundary;
   private final boolean leaveIntermediate;
   private final Boolean cleanupOnFailure;
@@ -78,6 +83,7 @@ public class HadoopTuningConfig implements TuningConfig
   private final boolean ingestOffheap;
   private final int bufferSize;
   private final float aggregationBufferRatio;
+  private final boolean useCombiner;
 
   @JsonCreator
   public HadoopTuningConfig(
@@ -85,6 +91,7 @@ public class HadoopTuningConfig implements TuningConfig
       final @JsonProperty("version") String version,
       final @JsonProperty("partitionsSpec") PartitionsSpec partitionsSpec,
       final @JsonProperty("shardSpecs") Map<DateTime, List<HadoopyShardSpec>> shardSpecs,
+      final @JsonProperty("indexSpec") IndexSpec indexSpec,
       final @JsonProperty("maxRowsInMemory") Integer maxRowsInMemory,
       final @JsonProperty("leaveIntermediate") boolean leaveIntermediate,
       final @JsonProperty("cleanupOnFailure") Boolean cleanupOnFailure,
@@ -95,13 +102,15 @@ public class HadoopTuningConfig implements TuningConfig
       final @JsonProperty("persistInHeap") boolean persistInHeap,
       final @JsonProperty("ingestOffheap") boolean ingestOffheap,
       final @JsonProperty("bufferSize") Integer bufferSize,
-      final @JsonProperty("aggregationBufferRatio") Float aggregationBufferRatio
+      final @JsonProperty("aggregationBufferRatio") Float aggregationBufferRatio,
+      final @JsonProperty("useCombiner") Boolean useCombiner
   )
   {
     this.workingPath = workingPath;
     this.version = version == null ? new DateTime().toString() : version;
     this.partitionsSpec = partitionsSpec == null ? DEFAULT_PARTITIONS_SPEC : partitionsSpec;
     this.shardSpecs = shardSpecs == null ? DEFAULT_SHARD_SPECS : shardSpecs;
+    this.indexSpec = indexSpec == null ? DEFAULT_INDEX_SPEC : indexSpec;
     this.rowFlushBoundary = maxRowsInMemory == null ? DEFAULT_ROW_FLUSH_BOUNDARY : maxRowsInMemory;
     this.leaveIntermediate = leaveIntermediate;
     this.cleanupOnFailure = cleanupOnFailure == null ? true : cleanupOnFailure;
@@ -115,6 +124,7 @@ public class HadoopTuningConfig implements TuningConfig
     this.ingestOffheap = ingestOffheap;
     this.bufferSize = bufferSize == null ? DEFAULT_BUFFER_SIZE : bufferSize;
     this.aggregationBufferRatio = aggregationBufferRatio == null ? DEFAULT_AGG_BUFFER_RATIO : aggregationBufferRatio;
+    this.useCombiner = useCombiner == null ? DEFAULT_USE_COMBINER : useCombiner.booleanValue();
   }
 
   @JsonProperty
@@ -139,6 +149,12 @@ public class HadoopTuningConfig implements TuningConfig
   public Map<DateTime, List<HadoopyShardSpec>> getShardSpecs()
   {
     return shardSpecs;
+  }
+
+  @JsonProperty
+  public IndexSpec getIndexSpec()
+  {
+    return indexSpec;
   }
 
   @JsonProperty
@@ -205,6 +221,12 @@ public class HadoopTuningConfig implements TuningConfig
     return aggregationBufferRatio;
   }
 
+  @JsonProperty
+  public boolean getUseCombiner()
+  {
+    return useCombiner;
+  }
+
   public HadoopTuningConfig withWorkingPath(String path)
   {
     return new HadoopTuningConfig(
@@ -212,6 +234,7 @@ public class HadoopTuningConfig implements TuningConfig
         version,
         partitionsSpec,
         shardSpecs,
+        indexSpec,
         rowFlushBoundary,
         leaveIntermediate,
         cleanupOnFailure,
@@ -222,7 +245,8 @@ public class HadoopTuningConfig implements TuningConfig
         persistInHeap,
         ingestOffheap,
         bufferSize,
-        aggregationBufferRatio
+        aggregationBufferRatio,
+        useCombiner
     );
   }
 
@@ -233,6 +257,7 @@ public class HadoopTuningConfig implements TuningConfig
         ver,
         partitionsSpec,
         shardSpecs,
+        indexSpec,
         rowFlushBoundary,
         leaveIntermediate,
         cleanupOnFailure,
@@ -243,7 +268,8 @@ public class HadoopTuningConfig implements TuningConfig
         persistInHeap,
         ingestOffheap,
         bufferSize,
-        aggregationBufferRatio
+        aggregationBufferRatio,
+        useCombiner
     );
   }
 
@@ -254,6 +280,7 @@ public class HadoopTuningConfig implements TuningConfig
         version,
         partitionsSpec,
         specs,
+        indexSpec,
         rowFlushBoundary,
         leaveIntermediate,
         cleanupOnFailure,
@@ -264,7 +291,8 @@ public class HadoopTuningConfig implements TuningConfig
         persistInHeap,
         ingestOffheap,
         bufferSize,
-        aggregationBufferRatio
+        aggregationBufferRatio,
+        useCombiner
     );
   }
 }

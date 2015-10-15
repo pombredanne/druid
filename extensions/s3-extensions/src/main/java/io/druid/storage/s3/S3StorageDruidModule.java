@@ -1,36 +1,32 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.storage.s3;
 
-import com.amazonaws.AmazonClientException;
 import com.amazonaws.auth.AWSCredentialsProvider;
-import com.amazonaws.auth.AWSCredentialsProviderChain;
-import com.amazonaws.auth.EnvironmentVariableCredentialsProvider;
-import com.amazonaws.auth.InstanceProfileCredentialsProvider;
-import com.amazonaws.auth.SystemPropertiesCredentialsProvider;
-import com.amazonaws.auth.profile.ProfileCredentialsProvider;
+import com.fasterxml.jackson.core.Version;
 import com.fasterxml.jackson.databind.Module;
-import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.Binder;
 import com.google.inject.Provides;
+import com.google.inject.multibindings.MapBinder;
+import io.druid.common.aws.AWSCredentialsConfig;
+import io.druid.common.aws.AWSCredentialsUtils;
+import io.druid.data.SearchableVersionedDataFinder;
 import io.druid.guice.Binders;
 import io.druid.guice.JsonConfigProvider;
 import io.druid.guice.LazySingleton;
@@ -44,21 +40,50 @@ import java.util.List;
  */
 public class S3StorageDruidModule implements DruidModule
 {
+  public static final String SCHEME = "s3_zip";
   @Override
   public List<? extends Module> getJacksonModules()
   {
-    return ImmutableList.of();
+    return ImmutableList.of(
+        new Module()
+        {
+          @Override
+          public String getModuleName()
+          {
+            return "DruidS3-" + System.identityHashCode(this);
+          }
+
+          @Override
+          public Version version()
+          {
+            return Version.unknownVersion();
+          }
+
+          @Override
+          public void setupModule(SetupContext context)
+          {
+            context.registerSubtypes(S3LoadSpec.class);
+          }
+        }
+    );
   }
 
   @Override
   public void configure(Binder binder)
   {
     JsonConfigProvider.bind(binder, "druid.s3", AWSCredentialsConfig.class);
-
-    Binders.dataSegmentPullerBinder(binder).addBinding("s3_zip").to(S3DataSegmentPuller.class).in(LazySingleton.class);
-    Binders.dataSegmentKillerBinder(binder).addBinding("s3_zip").to(S3DataSegmentKiller.class).in(LazySingleton.class);
-    Binders.dataSegmentMoverBinder(binder).addBinding("s3_zip").to(S3DataSegmentMover.class).in(LazySingleton.class);
-    Binders.dataSegmentArchiverBinder(binder).addBinding("s3_zip").to(S3DataSegmentArchiver.class).in(LazySingleton.class);
+    MapBinder.newMapBinder(binder, String.class, SearchableVersionedDataFinder.class)
+             .addBinding("s3")
+             .to(S3TimestampVersionedDataFinder.class)
+             .in(LazySingleton.class);
+    MapBinder.newMapBinder(binder, String.class, SearchableVersionedDataFinder.class)
+             .addBinding("s3n")
+             .to(S3TimestampVersionedDataFinder.class)
+             .in(LazySingleton.class);
+    Binders.dataSegmentPullerBinder(binder).addBinding(SCHEME).to(S3DataSegmentPuller.class).in(LazySingleton.class);
+    Binders.dataSegmentKillerBinder(binder).addBinding(SCHEME).to(S3DataSegmentKiller.class).in(LazySingleton.class);
+    Binders.dataSegmentMoverBinder(binder).addBinding(SCHEME).to(S3DataSegmentMover.class).in(LazySingleton.class);
+    Binders.dataSegmentArchiverBinder(binder).addBinding(SCHEME).to(S3DataSegmentArchiver.class).in(LazySingleton.class);
     Binders.dataSegmentPusherBinder(binder).addBinding("s3").to(S3DataSegmentPusher.class).in(LazySingleton.class);
     JsonConfigProvider.bind(binder, "druid.storage", S3DataSegmentPusherConfig.class);
     JsonConfigProvider.bind(binder, "druid.storage", S3DataSegmentArchiverConfig.class);
@@ -68,80 +93,11 @@ public class S3StorageDruidModule implements DruidModule
     binder.bind(S3TaskLogs.class).in(LazySingleton.class);
   }
 
-  private static class ConfigDrivenAwsCredentialsConfigProvider implements AWSCredentialsProvider 
-  {
-    private AWSCredentialsConfig config;
-
-    public ConfigDrivenAwsCredentialsConfigProvider(AWSCredentialsConfig config) {
-      this.config = config;
-    }
-    
-    @Override
-    public com.amazonaws.auth.AWSCredentials getCredentials() 
-    {
-        if (!Strings.isNullOrEmpty(config.getAccessKey()) && !Strings.isNullOrEmpty(config.getSecretKey())) {
-          return new com.amazonaws.auth.AWSCredentials() {
-            @Override
-            public String getAWSAccessKeyId() {
-              return config.getAccessKey();
-            }
-
-            @Override
-            public String getAWSSecretKey() {
-              return config.getSecretKey();
-            }
-          };
-        }
-        throw new AmazonClientException("Unable to load AWS credentials from druid AWSCredentialsConfig");
-    }
-    
-    @Override
-    public void refresh() {}
-  }
-  
-  private static class LazyFileSessionCredentialsProvider implements AWSCredentialsProvider 
-  {
-    private AWSCredentialsConfig config;
-    private FileSessionCredentialsProvider provider;
-    
-    public LazyFileSessionCredentialsProvider(AWSCredentialsConfig config) {
-      this.config = config;
-    }
-    
-    private FileSessionCredentialsProvider getUnderlyingProvider() {
-      if (provider == null) {
-        synchronized (config) {
-          if (provider == null) {
-            provider = new FileSessionCredentialsProvider(config.getFileSessionCredentials());
-          }
-        }
-      }
-      return provider;
-    }
-    
-    @Override
-    public com.amazonaws.auth.AWSCredentials getCredentials() 
-    {
-      return getUnderlyingProvider().getCredentials();
-    }
-
-    @Override
-    public void refresh() {
-      getUnderlyingProvider().refresh();
-    }
-  }
-  
   @Provides
   @LazySingleton
   public AWSCredentialsProvider getAWSCredentialsProvider(final AWSCredentialsConfig config)
   {
-    return new AWSCredentialsProviderChain(
-           new ConfigDrivenAwsCredentialsConfigProvider(config),
-           new LazyFileSessionCredentialsProvider(config),
-           new EnvironmentVariableCredentialsProvider(),
-           new SystemPropertiesCredentialsProvider(),
-           new ProfileCredentialsProvider(),
-           new InstanceProfileCredentialsProvider());
+    return AWSCredentialsUtils.defaultAWSCredentialsProviderChain(config);
   }
 
   @Provides

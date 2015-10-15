@@ -1,21 +1,21 @@
 /*
- * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
- */
+* Licensed to Metamarkets Group Inc. (Metamarkets) under one
+* or more contributor license agreements. See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership. Metamarkets licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License. You may obtain a copy of the License at
+*
+* http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied. See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
 
 package io.druid.segment;
 
@@ -24,6 +24,7 @@ import com.google.common.base.Function;
 import com.google.common.base.Objects;
 import com.google.common.base.Predicate;
 import com.google.common.base.Splitter;
+import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Iterators;
@@ -34,7 +35,6 @@ import com.google.common.collect.Sets;
 import com.google.common.io.ByteStreams;
 import com.google.common.io.Files;
 import com.google.common.primitives.Ints;
-import com.google.inject.Binder;
 import com.google.inject.Injector;
 import com.google.inject.Module;
 import com.metamx.collections.bitmap.BitmapFactory;
@@ -55,7 +55,6 @@ import io.druid.collections.CombiningIterable;
 import io.druid.common.utils.JodaUtils;
 import io.druid.common.utils.SerializerUtils;
 import io.druid.guice.GuiceInjectors;
-import io.druid.guice.JsonConfigProvider;
 import io.druid.query.aggregation.AggregatorFactory;
 import io.druid.segment.column.ColumnCapabilities;
 import io.druid.segment.column.ColumnCapabilitiesImpl;
@@ -65,6 +64,7 @@ import io.druid.segment.data.BitmapSerdeFactory;
 import io.druid.segment.data.CompressedFloatsIndexedSupplier;
 import io.druid.segment.data.CompressedLongsIndexedSupplier;
 import io.druid.segment.data.CompressedObjectStrategy;
+import io.druid.segment.data.CompressedVSizeIntsIndexedSupplier;
 import io.druid.segment.data.GenericIndexed;
 import io.druid.segment.data.Indexed;
 import io.druid.segment.data.IndexedInts;
@@ -95,6 +95,7 @@ import java.nio.LongBuffer;
 import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -110,28 +111,20 @@ public class IndexMaker
   private static final int INVALID_ROW = -1;
   private static final Splitter SPLITTER = Splitter.on(",");
   private static final ObjectMapper mapper;
-  private static final BitmapSerdeFactory bitmapSerdeFactory;
 
   static {
-    final Injector injector = GuiceInjectors.makeStartupInjectorWithModules(
-        ImmutableList.<Module>of(
-            new Module()
-            {
-              @Override
-              public void configure(Binder binder)
-              {
-                JsonConfigProvider.bind(binder, "druid.processing.bitmap", BitmapSerdeFactory.class);
-              }
-            }
-        )
-    );
+    final Injector injector = GuiceInjectors.makeStartupInjectorWithModules(ImmutableList.<Module>of());
     mapper = injector.getInstance(ObjectMapper.class);
-    bitmapSerdeFactory = injector.getInstance(BitmapSerdeFactory.class);
   }
 
-  public static File persist(final IncrementalIndex index, File outDir) throws IOException
+  public static File persist(
+      final IncrementalIndex index,
+      File outDir,
+      final Map<String, Object> segmentMetadata,
+      final IndexSpec indexSpec
+  ) throws IOException
   {
-    return persist(index, index.getInterval(), outDir);
+    return persist(index, index.getInterval(), outDir, segmentMetadata, indexSpec);
   }
 
   /**
@@ -147,16 +140,22 @@ public class IndexMaker
   public static File persist(
       final IncrementalIndex index,
       final Interval dataInterval,
-      File outDir
+      File outDir,
+      final Map<String, Object> segmentMetadata,
+      final IndexSpec indexSpec
   ) throws IOException
   {
-    return persist(index, dataInterval, outDir, new LoggingProgressIndicator(outDir.toString()));
+    return persist(
+        index, dataInterval, outDir, segmentMetadata, indexSpec, new LoggingProgressIndicator(outDir.toString())
+    );
   }
 
   public static File persist(
       final IncrementalIndex index,
       final Interval dataInterval,
       File outDir,
+      final Map<String, Object> segmentMetadata,
+      final IndexSpec indexSpec,
       ProgressIndicator progress
   ) throws IOException
   {
@@ -188,26 +187,29 @@ public class IndexMaker
             new IncrementalIndexAdapter(
                 dataInterval,
                 index,
-                bitmapSerdeFactory.getBitmapFactory()
+                indexSpec.getBitmapSerdeFactory().getBitmapFactory()
             )
         ),
         index.getMetricAggs(),
         outDir,
+        segmentMetadata,
+        indexSpec,
         progress
     );
   }
 
   public static File mergeQueryableIndex(
-      List<QueryableIndex> indexes, final AggregatorFactory[] metricAggs, File outDir
+      List<QueryableIndex> indexes, final AggregatorFactory[] metricAggs, File outDir, final IndexSpec indexSpec
   ) throws IOException
   {
-    return mergeQueryableIndex(indexes, metricAggs, outDir, new LoggingProgressIndicator(outDir.toString()));
+    return mergeQueryableIndex(indexes, metricAggs, outDir, indexSpec, new LoggingProgressIndicator(outDir.toString()));
   }
 
   public static File mergeQueryableIndex(
       List<QueryableIndex> indexes,
       final AggregatorFactory[] metricAggs,
       File outDir,
+      final IndexSpec indexSpec,
       ProgressIndicator progress
   ) throws IOException
   {
@@ -225,21 +227,27 @@ public class IndexMaker
         ),
         metricAggs,
         outDir,
+        null,
+        indexSpec,
         progress
     );
   }
 
   public static File merge(
-      List<IndexableAdapter> adapters, final AggregatorFactory[] metricAggs, File outDir
+      List<IndexableAdapter> adapters, final AggregatorFactory[] metricAggs, File outDir, final IndexSpec indexSpec
   ) throws IOException
   {
-    return merge(adapters, metricAggs, outDir, new LoggingProgressIndicator(outDir.toString()));
+    return merge(
+        adapters, metricAggs, outDir, null, indexSpec, new LoggingProgressIndicator(outDir.toString())
+    );
   }
 
   public static File merge(
       List<IndexableAdapter> adapters,
       final AggregatorFactory[] metricAggs,
       File outDir,
+      final Map<String, Object> segmentMetaData,
+      final IndexSpec indexSpec,
       ProgressIndicator progress
   ) throws IOException
   {
@@ -328,21 +336,58 @@ public class IndexMaker
       }
     };
 
-    return makeIndexFiles(adapters, outDir, progress, mergedDimensions, mergedMetrics, rowMergerFn);
+    return makeIndexFiles(
+        adapters, outDir, progress, mergedDimensions, mergedMetrics, segmentMetaData, rowMergerFn, indexSpec
+    );
   }
 
-  public static File append(
-      final List<IndexableAdapter> adapters,
-      File outDir
+
+  public static File convert(final File inDir, final File outDir, final IndexSpec indexSpec) throws IOException
+  {
+    return convert(inDir, outDir, indexSpec, new BaseProgressIndicator());
+  }
+
+  public static File convert(
+      final File inDir, final File outDir, final IndexSpec indexSpec, final ProgressIndicator progress
   ) throws IOException
   {
-    return append(adapters, outDir, new LoggingProgressIndicator(outDir.toString()));
+    try (QueryableIndex index = IndexIO.loadIndex(inDir)) {
+      final IndexableAdapter adapter = new QueryableIndexIndexableAdapter(index);
+      return makeIndexFiles(
+          ImmutableList.of(adapter),
+          outDir,
+          progress,
+          Lists.newArrayList(adapter.getDimensionNames()),
+          Lists.newArrayList(adapter.getMetricNames()),
+          null,
+          new Function<ArrayList<Iterable<Rowboat>>, Iterable<Rowboat>>()
+          {
+            @Nullable
+            @Override
+            public Iterable<Rowboat> apply(ArrayList<Iterable<Rowboat>> input)
+            {
+              return input.get(0);
+            }
+          },
+          indexSpec
+      );
+    }
   }
 
   public static File append(
       final List<IndexableAdapter> adapters,
       final File outDir,
-      final ProgressIndicator progress
+      final IndexSpec indexSpec
+  ) throws IOException
+  {
+    return append(adapters, outDir, new LoggingProgressIndicator(outDir.toString()), indexSpec);
+  }
+
+  public static File append(
+      final List<IndexableAdapter> adapters,
+      final File outDir,
+      final ProgressIndicator progress,
+      final IndexSpec indexSpec
   ) throws IOException
   {
     FileUtils.deleteDirectory(outDir);
@@ -411,7 +456,7 @@ public class IndexMaker
       }
     };
 
-    return makeIndexFiles(adapters, outDir, progress, mergedDimensions, mergedMetrics, rowMergerFn);
+    return makeIndexFiles(adapters, outDir, progress, mergedDimensions, mergedMetrics, null, rowMergerFn, indexSpec);
   }
 
   private static File makeIndexFiles(
@@ -420,7 +465,9 @@ public class IndexMaker
       final ProgressIndicator progress,
       final List<String> mergedDimensions,
       final List<String> mergedMetrics,
-      final Function<ArrayList<Iterable<Rowboat>>, Iterable<Rowboat>> rowMergerFn
+      final Map<String, Object> segmentMetadata,
+      final Function<ArrayList<Iterable<Rowboat>>, Iterable<Rowboat>> rowMergerFn,
+      final IndexSpec indexSpec
   ) throws IOException
   {
     progress.start();
@@ -503,14 +550,18 @@ public class IndexMaker
         theRows,
         columnCapabilities,
         dimensionValuesLookup,
-        rowNumConversions
+        rowNumConversions,
+        indexSpec
     );
 
     progress.progress();
-    makeMetricColumns(v9Smoosher, progress, theRows, mergedMetrics, valueTypes, metricTypeNames, rowCount);
+    makeMetricColumns(v9Smoosher, progress, theRows, mergedMetrics, valueTypes, metricTypeNames, rowCount, indexSpec);
 
     progress.progress();
-    makeIndexBinary(v9Smoosher, adapters, outDir, mergedDimensions, mergedMetrics, skippedDimensions, progress);
+    makeIndexBinary(
+        v9Smoosher, adapters, outDir, mergedDimensions, mergedMetrics, skippedDimensions, progress, indexSpec
+    );
+    makeMetadataBinary(v9Smoosher, progress, segmentMetadata);
 
     v9Smoosher.close();
 
@@ -548,7 +599,7 @@ public class IndexMaker
 
       for (int i = 0; i < adapters.size(); i++) {
         Indexed<String> dimValues = adapters.get(i).getDimValueLookup(dimension);
-        if (dimValues != null) {
+        if (!IndexMerger.isNullColumn(dimValues)) {
           dimValueLookups.add(dimValues);
           converters[i] = new DimValueConverter(dimValues);
         }
@@ -770,7 +821,8 @@ public class IndexMaker
       final Iterable<Rowboat> theRows,
       final Map<String, ColumnCapabilitiesImpl> columnCapabilities,
       final Map<String, Iterable<String>> dimensionValuesLookup,
-      final List<IntBuffer> rowNumConversions
+      final List<IntBuffer> rowNumConversions,
+      final IndexSpec indexSpec
   ) throws IOException
   {
     final String dimSection = "make dimension columns";
@@ -792,11 +844,41 @@ public class IndexMaker
           dimension,
           columnCapabilities,
           dimensionValuesLookup,
-          rowNumConversions
+          rowNumConversions,
+          indexSpec.getBitmapSerdeFactory(),
+          indexSpec.getDimensionCompressionStrategy()
       );
       dimIndex++;
     }
     progress.stopSection(dimSection);
+  }
+
+  private static class NullsAtZeroConvertingIntList extends AbstractList<Integer>
+  {
+    private final List<Integer> delegate;
+    private final boolean delegateHasNullAtZero;
+
+    NullsAtZeroConvertingIntList(List<Integer> delegate, final boolean delegateHasNullAtZero)
+    {
+      this.delegate = delegate;
+      this.delegateHasNullAtZero = delegateHasNullAtZero;
+    }
+
+    @Override
+    public Integer get(int index)
+    {
+      Integer val = delegate.get(index);
+      if (val == null) {
+        return 0;
+      }
+      return delegateHasNullAtZero ? val : val + 1;
+    }
+
+    @Override
+    public int size()
+    {
+      return delegate.size();
+    }
   }
 
   private static void makeDimColumn(
@@ -808,7 +890,9 @@ public class IndexMaker
       final String dimension,
       final Map<String, ColumnCapabilitiesImpl> columnCapabilities,
       final Map<String, Iterable<String>> dimensionValuesLookup,
-      final List<IntBuffer> rowNumConversions
+      final List<IntBuffer> rowNumConversions,
+      final BitmapSerdeFactory bitmapSerdeFactory,
+      final CompressedObjectStrategy.CompressionStrategy compressionStrategy
   ) throws IOException
   {
     final String section = String.format("make %s", dimension);
@@ -827,8 +911,8 @@ public class IndexMaker
     dimBuilder.setHasMultipleValues(hasMultipleValues);
 
     // make dimension columns
-    VSizeIndexedInts singleValCol = null;
-    VSizeIndexed multiValCol = null;
+    List<Integer> singleValCol;
+    final VSizeIndexed multiValCol;
 
     ColumnDictionaryEntryStore adder = hasMultipleValues
                                        ? new MultiValColumnDictionaryEntryStore()
@@ -861,7 +945,7 @@ public class IndexMaker
     final Iterable<String> dimensionValues = dimensionValuesLookup.get(dimension);
     GenericIndexed<String> dictionary = GenericIndexed.fromIterable(
         dimensionValues,
-        GenericIndexed.stringStrategy
+        GenericIndexed.STRING_STRATEGY
     );
     boolean bumpDictionary = false;
 
@@ -874,123 +958,70 @@ public class IndexMaker
           bumpDictionary = true;
           log.info("Dimension[%s] has no null value in the dictionary, expanding...", dimension);
 
-          final List<String> nullList = Lists.newArrayList();
-          nullList.add(null);
-
           dictionary = GenericIndexed.fromIterable(
-              Iterables.concat(nullList, dimensionValues),
-              GenericIndexed.stringStrategy
+              Iterables.concat(Collections.<String>singleton(null), dimensionValues),
+              GenericIndexed.STRING_STRATEGY
           );
 
           final int dictionarySize = dictionary.size();
+
+          singleValCol = null;
           multiValCol = VSizeIndexed.fromIterable(
-              FunctionalIterable
-                  .create(vals)
-                  .transform(
-                      new Function<List<Integer>, VSizeIndexedInts>()
-                      {
-                        @Override
-                        public VSizeIndexedInts apply(final List<Integer> input)
-                        {
-                          if (input == null) {
-                            return VSizeIndexedInts.fromList(
-                                new AbstractList<Integer>()
-                                {
-                                  @Override
-                                  public Integer get(int index)
-                                  {
-                                    return 0;
-                                  }
-
-                                  @Override
-                                  public int size()
-                                  {
-                                    return 1;
-                                  }
-                                }, dictionarySize
-                            );
-                          }
-                          return VSizeIndexedInts.fromList(
-                              new AbstractList<Integer>()
-                              {
-                                @Override
-                                public Integer get(int index)
-                                {
-                                  Integer val = input.get(index);
-                                  if (val == null) {
-                                    return 0;
-                                  }
-                                  return val + 1;
-                                }
-
-                                @Override
-                                public int size()
-                                {
-                                  return input.size();
-                                }
-                              },
-                              dictionarySize
-                          );
-                        }
-                      }
-                  )
-          );
-        } else {
-          final int dictionarySize = dictionary.size();
-          multiValCol = VSizeIndexed.fromIterable(
-              FunctionalIterable
-                  .create(vals)
-                  .transform(
-                      new Function<List<Integer>, VSizeIndexedInts>()
-                      {
-                        @Override
-                        public VSizeIndexedInts apply(List<Integer> input)
-                        {
-                          if (input == null) {
-                            return VSizeIndexedInts.fromList(
-                                new AbstractList<Integer>()
-                                {
-                                  @Override
-                                  public Integer get(int index)
-                                  {
-                                    return 0;
-                                  }
-
-                                  @Override
-                                  public int size()
-                                  {
-                                    return 1;
-                                  }
-                                }, dictionarySize
-                            );
-                          }
-                          return VSizeIndexedInts.fromList(
-                              input,
-                              dictionarySize
-                          );
-                        }
-                      }
-                  )
-          );
-        }
-      } else {
-        final int dictionarySize = dictionary.size();
-        multiValCol = VSizeIndexed.fromIterable(
-            FunctionalIterable
-                .create(vals)
-                .transform(
-                    new Function<List<Integer>, VSizeIndexedInts>()
+              Iterables.transform(
+                  vals,
+                  new Function<List<Integer>, VSizeIndexedInts>()
+                  {
+                    @Override
+                    public VSizeIndexedInts apply(final List<Integer> input)
                     {
-                      @Override
-                      public VSizeIndexedInts apply(List<Integer> input)
-                      {
+                      if (input == null) {
+                        return VSizeIndexedInts.fromList(ImmutableList.<Integer>of(0), dictionarySize);
+                      } else {
                         return VSizeIndexedInts.fromList(
-                            input,
+                            new NullsAtZeroConvertingIntList(input, false),
                             dictionarySize
                         );
                       }
                     }
-                )
+                  }
+              )
+          );
+        } else {
+          final int dictionarySize = dictionary.size();
+          singleValCol = null;
+          multiValCol = VSizeIndexed.fromIterable(
+              Iterables.transform(
+                  vals,
+                  new Function<List<Integer>, VSizeIndexedInts>()
+                  {
+                    @Override
+                    public VSizeIndexedInts apply(List<Integer> input)
+                    {
+                      if (input == null) {
+                        return VSizeIndexedInts.fromList(ImmutableList.<Integer>of(0), dictionarySize);
+                      } else {
+                        return VSizeIndexedInts.fromList(input, dictionarySize);
+                      }
+                    }
+                  }
+              )
+          );
+        }
+      } else {
+        final int dictionarySize = dictionary.size();
+        singleValCol = null;
+        multiValCol = VSizeIndexed.fromIterable(
+            Iterables.transform(
+                vals,
+                new Function<List<Integer>, VSizeIndexedInts>()
+                {
+                  @Override
+                  public VSizeIndexedInts apply(List<Integer> input)
+                  {
+                    return VSizeIndexedInts.fromList(input, dictionarySize);
+                  }
+                }
+            )
         );
       }
     } else {
@@ -1008,52 +1039,30 @@ public class IndexMaker
 
           dictionary = GenericIndexed.fromIterable(
               Iterables.concat(nullList, dimensionValues),
-              GenericIndexed.stringStrategy
+              GenericIndexed.STRING_STRATEGY
           );
-          singleValCol = VSizeIndexedInts.fromList(
-              new AbstractList<Integer>()
-              {
-                @Override
-                public Integer get(int index)
-                {
-                  Integer val = vals.get(index);
-                  if (val == null) {
-                    return 0;
-                  }
-                  return val + 1;
-                }
-
-                @Override
-                public int size()
-                {
-                  return vals.size();
-                }
-              }, dictionary.size()
-          );
+          multiValCol = null;
+          singleValCol = new NullsAtZeroConvertingIntList(vals, false);
         } else {
-          singleValCol = VSizeIndexedInts.fromList(
-              new AbstractList<Integer>()
-              {
-                @Override
-                public Integer get(int index)
-                {
-                  Integer val = vals.get(index);
-                  if (val == null) {
-                    return 0;
-                  }
-                  return val;
-                }
-
-                @Override
-                public int size()
-                {
-                  return vals.size();
-                }
-              }, dictionary.size()
-          );
+          multiValCol = null;
+          singleValCol = new NullsAtZeroConvertingIntList(vals, true);
         }
       } else {
-        singleValCol = VSizeIndexedInts.fromList(vals, dictionary.size());
+        multiValCol = null;
+        singleValCol = new AbstractList<Integer>()
+        {
+          @Override
+          public Integer get(int index)
+          {
+            return vals.get(index);
+          }
+
+          @Override
+          public int size()
+          {
+            return vals.size();
+          }
+        };
       }
     }
 
@@ -1176,16 +1185,45 @@ public class IndexMaker
 
     log.info("Completed dimension[%s] with cardinality[%,d]. Starting write.", dimension, dictionary.size());
 
+    final DictionaryEncodedColumnPartSerde.Builder dimPartBuilder = DictionaryEncodedColumnPartSerde
+        .builder()
+        .withDictionary(dictionary)
+        .withBitmapSerdeFactory(bitmapSerdeFactory)
+        .withBitmaps(bitmaps)
+        .withSpatialIndex(spatialIndex)
+        .withByteOrder(IndexIO.BYTE_ORDER);
+
+    if (singleValCol != null) {
+      if (compressionStrategy != null) {
+        dimPartBuilder.withSingleValuedColumn(
+            CompressedVSizeIntsIndexedSupplier.fromList(
+                singleValCol,
+                dictionary.size(),
+                CompressedVSizeIntsIndexedSupplier.maxIntsInBufferForValue(dictionary.size()),
+                IndexIO.BYTE_ORDER,
+                compressionStrategy
+            )
+        );
+      } else {
+        dimPartBuilder.withSingleValuedColumn(VSizeIndexedInts.fromList(singleValCol, dictionary.size()));
+      }
+    } else if (compressionStrategy != null) {
+      dimPartBuilder.withMultiValuedColumn(
+          CompressedVSizeIndexedSupplier.fromIterable(
+              multiValCol,
+              dictionary.size(),
+              IndexIO.BYTE_ORDER,
+              compressionStrategy
+          )
+      );
+    } else {
+      dimPartBuilder.withMultiValuedColumn(multiValCol);
+    }
+
+
     writeColumn(
         v9Smoosher,
-        new DictionaryEncodedColumnPartSerde(
-            dictionary,
-            singleValCol,
-            multiValCol,
-            bitmapSerdeFactory,
-            bitmaps,
-            spatialIndex
-        ),
+        dimPartBuilder.build(),
         dimBuilder,
         dimension
     );
@@ -1200,7 +1238,8 @@ public class IndexMaker
       final List<String> mergedMetrics,
       final Map<String, ValueType> valueTypes,
       final Map<String, String> metricTypeNames,
-      final int rowCount
+      final int rowCount,
+      final IndexSpec indexSpec
   ) throws IOException
   {
     final String metSection = "make metric columns";
@@ -1208,7 +1247,17 @@ public class IndexMaker
 
     int metIndex = 0;
     for (String metric : mergedMetrics) {
-      makeMetricColumn(v9Smoosher, progress, theRows, metIndex, metric, valueTypes, metricTypeNames, rowCount);
+      makeMetricColumn(
+          v9Smoosher,
+          progress,
+          theRows,
+          metIndex,
+          metric,
+          valueTypes,
+          metricTypeNames,
+          rowCount,
+          indexSpec.getMetricCompressionStrategy()
+      );
       metIndex++;
     }
     progress.stopSection(metSection);
@@ -1222,7 +1271,8 @@ public class IndexMaker
       final String metric,
       final Map<String, ValueType> valueTypes,
       final Map<String, String> metricTypeNames,
-      final int rowCount
+      final int rowCount,
+      final CompressedObjectStrategy.CompressionStrategy compressionStrategy
   ) throws IOException
   {
     final String section = String.format("make column[%s]", metric);
@@ -1245,7 +1295,7 @@ public class IndexMaker
         CompressedFloatsIndexedSupplier compressedFloats = CompressedFloatsIndexedSupplier.fromFloatBuffer(
             FloatBuffer.wrap(arr),
             IndexIO.BYTE_ORDER,
-            CompressedObjectStrategy.DEFAULT_COMPRESSION_STRATEGY
+            compressionStrategy
         );
 
         writeColumn(
@@ -1269,7 +1319,7 @@ public class IndexMaker
         CompressedLongsIndexedSupplier compressedLongs = CompressedLongsIndexedSupplier.fromLongBuffer(
             LongBuffer.wrap(arr),
             IndexIO.BYTE_ORDER,
-            CompressedObjectStrategy.DEFAULT_COMPRESSION_STRATEGY
+            compressionStrategy
         );
 
         writeColumn(
@@ -1326,7 +1376,8 @@ public class IndexMaker
       final List<String> mergedDimensions,
       final List<String> mergedMetrics,
       final Set<String> skippedDimensions,
-      final ProgressIndicator progress
+      final ProgressIndicator progress,
+      final IndexSpec indexSpec
   ) throws IOException
   {
     final String section = "building index.drd";
@@ -1349,17 +1400,16 @@ public class IndexMaker
         }
     );
 
-    GenericIndexed<String> cols = GenericIndexed.fromIterable(finalColumns, GenericIndexed.stringStrategy);
-    GenericIndexed<String> dims = GenericIndexed.fromIterable(finalDimensions, GenericIndexed.stringStrategy);
+    GenericIndexed<String> cols = GenericIndexed.fromIterable(finalColumns, GenericIndexed.STRING_STRATEGY);
+    GenericIndexed<String> dims = GenericIndexed.fromIterable(finalDimensions, GenericIndexed.STRING_STRATEGY);
 
-    final String bitmapSerdeFactoryType = mapper.writeValueAsString(bitmapSerdeFactory);
+    final String bitmapSerdeFactoryType = mapper.writeValueAsString(indexSpec.getBitmapSerdeFactory());
     final long numBytes = cols.getSerializedSize()
                           + dims.getSerializedSize()
                           + 16
                           + serializerUtils.getSerializedStringByteSize(bitmapSerdeFactoryType);
 
     final SmooshedWriter writer = v9Smoosher.addWithSmooshedWriter("index.drd", numBytes);
-
     cols.writeToChannel(writer);
     dims.writeToChannel(writer);
 
@@ -1374,6 +1424,7 @@ public class IndexMaker
 
     serializerUtils.writeLong(writer, dataInterval.getStartMillis());
     serializerUtils.writeLong(writer, dataInterval.getEndMillis());
+
     serializerUtils.writeString(
         writer, bitmapSerdeFactoryType
     );
@@ -1382,6 +1433,19 @@ public class IndexMaker
     IndexIO.checkFileSize(new File(outDir, "index.drd"));
 
     progress.stopSection(section);
+  }
+
+  private static void makeMetadataBinary(
+      final FileSmoosher v9Smoosher,
+      final ProgressIndicator progress,
+      final Map<String, Object> segmentMetadata
+  ) throws IOException
+  {
+    if (segmentMetadata != null && !segmentMetadata.isEmpty()) {
+      progress.startSection("metadata.drd");
+      v9Smoosher.add("metadata.drd", ByteBuffer.wrap(mapper.writeValueAsBytes(segmentMetadata)));
+      progress.stopSection("metadata.drd");
+    }
   }
 
   private static void writeColumn(
@@ -1539,6 +1603,7 @@ public class IndexMaker
     private final Map<String, IntBuffer> converters;
     private final int indexNumber;
 
+
     MMappedIndexRowIterable(
         Iterable<Rowboat> index,
         List<String> convertedDims,
@@ -1575,6 +1640,18 @@ public class IndexMaker
     @Override
     public Iterator<Rowboat> iterator()
     {
+      final IntBuffer[] converterArray = FluentIterable
+          .from(convertedDims)
+          .transform(
+              new Function<String, IntBuffer>()
+              {
+                @Override
+                public IntBuffer apply(String input)
+                {
+                  return converters.get(input);
+                }
+              }
+          ).toArray(IntBuffer.class);
       return Iterators.transform(
           index.iterator(),
           new Function<Rowboat, Rowboat>()
@@ -1582,10 +1659,10 @@ public class IndexMaker
             @Override
             public Rowboat apply(Rowboat input)
             {
-              int[][] dims = input.getDims();
-              int[][] newDims = new int[convertedDims.size()][];
-              for (int i = 0; i < convertedDims.size(); ++i) {
-                IntBuffer converter = converters.get(convertedDims.get(i));
+              final int[][] dims = input.getDims();
+              final int[][] newDims = new int[convertedDims.size()][];
+              for (int i = 0; i < newDims.length; ++i) {
+                final IntBuffer converter = converterArray[i];
 
                 if (converter == null) {
                   continue;

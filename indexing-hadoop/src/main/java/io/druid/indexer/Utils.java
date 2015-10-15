@@ -1,28 +1,24 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.indexer;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.common.base.Preconditions;
-import com.google.common.collect.Iterators;
 import com.metamx.common.ISE;
 import io.druid.jackson.DefaultObjectMapper;
 import org.apache.hadoop.fs.FileSystem;
@@ -36,8 +32,6 @@ import org.apache.hadoop.util.ReflectionUtils;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
 
 /**
@@ -46,30 +40,19 @@ public class Utils
 {
   private static final ObjectMapper jsonMapper = new DefaultObjectMapper();
 
-  public static <K, V> Map<K, V> zipMap(Iterable<K> keys, Iterable<V> values)
-  {
-    Map<K, V> retVal = new HashMap<K, V>();
-
-    Iterator<K> keyIter = keys.iterator();
-    Iterator<V> valsIter = values.iterator();
-    while (keyIter.hasNext()) {
-      final K key = keyIter.next();
-
-      Preconditions.checkArgument(valsIter.hasNext(), "keys longer than vals, bad, bad vals.  Broke on key[%s]", key);
-      retVal.put(key, valsIter.next());
-    }
-    if (valsIter.hasNext()) {
-      throw new ISE("More values[%d] than keys[%d]", retVal.size() + Iterators.size(valsIter), retVal.size());
-    }
-
-    return retVal;
-  }
-
   public static OutputStream makePathAndOutputStream(JobContext job, Path outputPath, boolean deleteExisting)
       throws IOException
   {
     OutputStream retVal;
     FileSystem fs = outputPath.getFileSystem(job.getConfiguration());
+    Class<? extends CompressionCodec> codecClass;
+    CompressionCodec codec = null;
+
+    if (FileOutputFormat.getCompressOutput(job)) {
+      codecClass = FileOutputFormat.getOutputCompressorClass(job, GzipCodec.class);
+      codec = ReflectionUtils.newInstance(codecClass, job.getConfiguration());
+      outputPath = new Path(outputPath.toString() + codec.getDefaultExtension());
+    }
 
     if (fs.exists(outputPath)) {
       if (deleteExisting) {
@@ -79,16 +62,11 @@ public class Utils
       }
     }
 
-    if (!FileOutputFormat.getCompressOutput(job)) {
-      retVal = fs.create(outputPath, false);
-    } else {
-      Class<? extends CompressionCodec> codecClass = FileOutputFormat.getOutputCompressorClass(job, GzipCodec.class);
-      CompressionCodec codec = ReflectionUtils.newInstance(codecClass, job.getConfiguration());
-      outputPath = new Path(outputPath.toString() + codec.getDefaultExtension());
-
+    if (FileOutputFormat.getCompressOutput(job)) {
       retVal = codec.createOutputStream(fs.create(outputPath, false));
+    } else {
+      retVal = fs.create(outputPath, false);
     }
-
     return retVal;
   }
 

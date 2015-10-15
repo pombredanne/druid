@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2014  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.guice;
@@ -25,6 +23,7 @@ import com.google.inject.Module;
 import io.druid.indexer.MetadataStorageUpdaterJobHandler;
 import io.druid.indexer.SQLMetadataStorageUpdaterJobHandler;
 import io.druid.indexing.overlord.IndexerMetadataStorageCoordinator;
+import io.druid.metadata.MetadataRuleManagerConfig;
 import io.druid.metadata.MetadataStorageActionHandlerFactory;
 import io.druid.metadata.IndexerSQLMetadataStorageCoordinator;
 import io.druid.metadata.MetadataRuleManager;
@@ -44,6 +43,11 @@ import io.druid.metadata.SQLMetadataSegmentManagerProvider;
 import io.druid.metadata.SQLMetadataSegmentPublisher;
 import io.druid.metadata.SQLMetadataSegmentPublisherProvider;
 import io.druid.metadata.SQLMetadataStorageActionHandlerFactory;
+import io.druid.audit.AuditManager;
+import io.druid.server.audit.AuditManagerProvider;
+import io.druid.server.audit.SQLAuditManager;
+import io.druid.server.audit.SQLAuditManagerConfig;
+import io.druid.server.audit.SQLAuditManagerProvider;
 
 public class SQLMetadataStorageDruidModule implements Module
 {
@@ -137,6 +141,20 @@ public class SQLMetadataStorageDruidModule implements Module
         Key.get(SQLMetadataStorageUpdaterJobHandler.class),
         defaultPropertyValue
     );
+    PolyBind.createChoiceWithDefault(
+        binder,
+        PROPERTY,
+        Key.get(AuditManager.class),
+        Key.get(SQLAuditManager.class),
+        defaultPropertyValue
+    );
+    PolyBind.createChoiceWithDefault(
+        binder,
+        PROPERTY,
+        Key.get(AuditManagerProvider.class),
+        Key.get(SQLAuditManagerProvider.class),
+        defaultPropertyValue
+    );
   }
 
   @Override
@@ -185,6 +203,18 @@ public class SQLMetadataStorageDruidModule implements Module
     PolyBind.optionBinder(binder, Key.get(MetadataStorageUpdaterJobHandler.class))
             .addBinding(type)
             .to(SQLMetadataStorageUpdaterJobHandler.class)
+            .in(LazySingleton.class);
+
+    JsonConfigProvider.bind(binder, "druid.audit.manager", SQLAuditManagerConfig.class);
+
+    PolyBind.optionBinder(binder, Key.get(AuditManager.class))
+            .addBinding(type)
+            .to(SQLAuditManager.class)
+            .in(LazySingleton.class);
+
+    PolyBind.optionBinder(binder, Key.get(AuditManagerProvider.class))
+            .addBinding(type)
+            .to(SQLAuditManagerProvider.class)
             .in(LazySingleton.class);
   }
 }

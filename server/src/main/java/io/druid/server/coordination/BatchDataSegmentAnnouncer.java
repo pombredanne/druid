@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.server.coordination;
@@ -27,6 +25,7 @@ import com.google.common.collect.Sets;
 import com.google.inject.Inject;
 import com.metamx.common.ISE;
 import com.metamx.common.logger.Logger;
+import io.druid.common.utils.UUIDUtils;
 import io.druid.curator.announcement.Announcer;
 import io.druid.server.initialization.BatchDataSegmentAnnouncerConfig;
 import io.druid.server.initialization.ZkPathsConfig;
@@ -51,6 +50,7 @@ public class BatchDataSegmentAnnouncer extends AbstractDataSegmentAnnouncer
   private final Announcer announcer;
   private final ObjectMapper jsonMapper;
   private final String liveSegmentLocation;
+  private final DruidServerMetadata server;
 
   private final Object lock = new Object();
   private final AtomicLong counter = new AtomicLong(0);
@@ -71,6 +71,7 @@ public class BatchDataSegmentAnnouncer extends AbstractDataSegmentAnnouncer
     this.config = config;
     this.announcer = announcer;
     this.jsonMapper = jsonMapper;
+    this.server = server;
 
     this.liveSegmentLocation = ZKPaths.makePath(zkPaths.getLiveSegmentsPath(), server.getName());
   }
@@ -86,7 +87,7 @@ public class BatchDataSegmentAnnouncer extends AbstractDataSegmentAnnouncer
     synchronized (lock) {
       // create new batch
       if (availableZNodes.isEmpty()) {
-        SegmentZNode availableZNode = new SegmentZNode(makeServedSegmentPath(new DateTime().toString()));
+        SegmentZNode availableZNode = new SegmentZNode(makeServedSegmentPath());
         availableZNode.addSegment(segment);
 
       log.info("Announcing segment[%s] at path[%s]", segment.getIdentifier(), availableZNode.getPath());
@@ -142,7 +143,7 @@ public class BatchDataSegmentAnnouncer extends AbstractDataSegmentAnnouncer
   @Override
   public void announceSegments(Iterable<DataSegment> segments) throws IOException
   {
-    SegmentZNode segmentZNode = new SegmentZNode(makeServedSegmentPath(new DateTime().toString()));
+    SegmentZNode segmentZNode = new SegmentZNode(makeServedSegmentPath());
     Set<DataSegment> batch = Sets.newHashSet();
     int byteSize = 0;
     int count = 0;
@@ -158,7 +159,7 @@ public class BatchDataSegmentAnnouncer extends AbstractDataSegmentAnnouncer
         segmentZNode.addSegments(batch);
         announcer.announce(segmentZNode.getPath(), segmentZNode.getBytes());
 
-        segmentZNode = new SegmentZNode(makeServedSegmentPath(new DateTime().toString()));
+        segmentZNode = new SegmentZNode(makeServedSegmentPath());
         batch = Sets.newHashSet();
         count = 0;
         byteSize = 0;
@@ -181,6 +182,11 @@ public class BatchDataSegmentAnnouncer extends AbstractDataSegmentAnnouncer
     for (DataSegment segment : segments) {
       unannounceSegment(segment);
     }
+  }
+
+  private String makeServedSegmentPath(){
+    // server.getName() is already in the zk path
+    return makeServedSegmentPath(UUIDUtils.generateUuid(server.getHost(), server.getType(), server.getTier(), new DateTime().toString()));
   }
 
   private String makeServedSegmentPath(String zNode)

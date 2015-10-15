@@ -1,26 +1,25 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.storage.s3;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Predicate;
+import com.metamx.common.FileUtils;
 import com.metamx.common.RetryUtils;
 import io.druid.segment.loading.DataSegmentPusherUtil;
 import io.druid.timeline.DataSegment;
@@ -53,30 +52,38 @@ public class S3Utils
     }
   }
 
+  public static boolean isServiceExceptionRecoverable(ServiceException ex)
+  {
+    final boolean isIOException = ex.getCause() instanceof IOException;
+    final boolean isTimeout = "RequestTimeout".equals(((ServiceException) ex).getErrorCode());
+    return isIOException || isTimeout;
+  }
+
+  public static final Predicate<Throwable> S3RETRY = new Predicate<Throwable>()
+  {
+    @Override
+    public boolean apply(Throwable e)
+    {
+      if (e == null) {
+        return false;
+      } else if (e instanceof IOException) {
+        return true;
+      } else if (e instanceof ServiceException) {
+        return isServiceExceptionRecoverable((ServiceException) e);
+      } else {
+        return apply(e.getCause());
+      }
+    }
+  };
+
   /**
    * Retries S3 operations that fail due to io-related exceptions. Service-level exceptions (access denied, file not
    * found, etc) are not retried.
    */
   public static <T> T retryS3Operation(Callable<T> f) throws Exception
   {
-    final Predicate<Throwable> shouldRetry = new Predicate<Throwable>()
-    {
-      @Override
-      public boolean apply(Throwable e)
-      {
-        if (e instanceof IOException) {
-          return true;
-        } else if (e instanceof ServiceException) {
-          final boolean isIOException = e.getCause() instanceof IOException;
-          final boolean isTimeout = "RequestTimeout".equals(((ServiceException) e).getErrorCode());
-          return isIOException || isTimeout;
-        } else {
-          return false;
-        }
-      }
-    };
     final int maxTries = 10;
-    return RetryUtils.retry(f, shouldRetry, maxTries);
+    return RetryUtils.retry(f, S3RETRY, maxTries);
   }
 
   public static boolean isObjectInBucket(RestS3Service s3Client, String bucketName, String objectKey)

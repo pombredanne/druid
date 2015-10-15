@@ -1,50 +1,129 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2014  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.metadata;
 
 import com.google.common.base.Supplier;
+import com.google.common.base.Suppliers;
 import io.druid.metadata.storage.derby.DerbyConnector;
 import org.junit.Assert;
+import org.junit.rules.ExternalResource;
 import org.skife.jdbi.v2.DBI;
 import org.skife.jdbi.v2.exceptions.UnableToObtainConnectionException;
 
 import java.sql.SQLException;
+import java.util.UUID;
 
 public class TestDerbyConnector extends DerbyConnector
 {
+  private final String jdbcUri;
+
   public TestDerbyConnector(
       Supplier<MetadataStorageConnectorConfig> config,
       Supplier<MetadataStorageTablesConfig> dbTables
   )
   {
-    super(config, dbTables, new DBI("jdbc:derby:memory:druidTest;create=true"));
+    this(config, dbTables, "jdbc:derby:memory:druidTest" + dbSafeUUID());
+  }
+
+  protected TestDerbyConnector(
+      Supplier<MetadataStorageConnectorConfig> config,
+      Supplier<MetadataStorageTablesConfig> dbTables,
+      String jdbcUri
+  )
+  {
+    super(config, dbTables, new DBI(jdbcUri + ";create=true"));
+    this.jdbcUri = jdbcUri;
   }
 
   public void tearDown()
   {
     try {
-      new DBI("jdbc:derby:memory:druidTest;drop=true").open().close();
-    } catch(UnableToObtainConnectionException e) {
+      new DBI(jdbcUri + ";drop=true").open().close();
+    }
+    catch (UnableToObtainConnectionException e) {
       SQLException cause = (SQLException) e.getCause();
       // error code "08006" indicates proper shutdown
-      Assert.assertEquals("08006", cause.getSQLState());
+      Assert.assertEquals(String.format("Derby not shutdown: [%s]", cause.toString()), "08006", cause.getSQLState());
+    }
+  }
+
+  public static String dbSafeUUID()
+  {
+    return UUID.randomUUID().toString().replace("-", "");
+  }
+
+  public String getJdbcUri()
+  {
+    return jdbcUri;
+  }
+  
+  public static class DerbyConnectorRule extends ExternalResource
+  {
+    private TestDerbyConnector connector;
+    private final Supplier<MetadataStorageTablesConfig> dbTables;
+    private final MetadataStorageConnectorConfig connectorConfig;
+
+    public DerbyConnectorRule()
+    {
+      this(Suppliers.ofInstance(MetadataStorageTablesConfig.fromBase("druidTest")));
+    }
+
+    public DerbyConnectorRule(
+        Supplier<MetadataStorageTablesConfig> dbTables
+    )
+    {
+      this.dbTables = dbTables;
+      this.connectorConfig = new MetadataStorageConnectorConfig()
+      {
+        @Override
+        public String getConnectURI()
+        {
+          return connector.getJdbcUri();
+        }
+      };
+    }
+
+    @Override
+    protected void before() throws Throwable
+    {
+      connector = new TestDerbyConnector(Suppliers.ofInstance(connectorConfig), dbTables);
+      connector.getDBI().open().close(); // create db
+    }
+
+    @Override
+    protected void after()
+    {
+      connector.tearDown();
+    }
+
+    public TestDerbyConnector getConnector()
+    {
+      return connector;
+    }
+
+    public MetadataStorageConnectorConfig getMetadataConnectorConfig()
+    {
+      return connectorConfig;
+    }
+
+    public Supplier<MetadataStorageTablesConfig> metadataTablesConfigSupplier()
+    {
+      return dbTables;
     }
   }
 }

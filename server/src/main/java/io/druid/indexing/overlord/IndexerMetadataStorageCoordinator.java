@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.indexing.overlord;
@@ -30,6 +28,16 @@ import java.util.Set;
  */
 public interface IndexerMetadataStorageCoordinator
 {
+  /**
+   * Get all segments which may include any data in the interval and are flagged as used.
+   *
+   * @param dataSource The datasource to query
+   * @param interval   The interval for which all applicable and used datasources are requested. Start is inclusive, end is exclusive
+   *
+   * @return The DataSegments which include data in the requested interval. These segments may contain data outside the requested interval.
+   *
+   * @throws IOException
+   */
   public List<DataSegment> getUsedSegmentsForInterval(final String dataSource, final Interval interval)
       throws IOException;
 
@@ -38,6 +46,7 @@ public interface IndexerMetadataStorageCoordinator
    * with identifiers already in the metadata storage will not be added).
    *
    * @param segments set of segments to add
+   *
    * @return set of segments actually added
    */
   public Set<DataSegment> announceHistoricalSegments(final Set<DataSegment> segments) throws IOException;
@@ -47,5 +56,13 @@ public interface IndexerMetadataStorageCoordinator
 
   public void deleteSegments(final Set<DataSegment> segments) throws IOException;
 
+  /**
+   * Get all segments which include ONLY data within the given interval and are not flagged as used.
+   *
+   * @param dataSource The datasource the segments belong to
+   * @param interval   Filter the data segments to ones that include data in this interval exclusively. Start is inclusive, end is exclusive
+   *
+   * @return DataSegments which include ONLY data within the requested interval and are not flagged as used. Data segments NOT returned here may include data in the interval
+   */
   public List<DataSegment> getUnusedSegmentsForInterval(final String dataSource, final Interval interval);
 }

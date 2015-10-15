@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.metadata;
@@ -24,12 +22,15 @@ import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Ordering;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.ListeningScheduledExecutorService;
+import com.google.common.util.concurrent.MoreExecutors;
 import com.google.inject.Inject;
 import com.metamx.common.MapUtils;
-import com.metamx.common.concurrent.ScheduledExecutors;
 import com.metamx.common.lifecycle.LifecycleStart;
 import com.metamx.common.lifecycle.LifecycleStop;
 import com.metamx.common.logger.Logger;
+import com.metamx.emitter.EmittingLogger;
 import io.druid.client.DruidDataSource;
 import io.druid.concurrent.Execs;
 import io.druid.guice.ManageLifecycle;
@@ -58,7 +59,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -66,7 +67,8 @@ import java.util.concurrent.atomic.AtomicReference;
 @ManageLifecycle
 public class SQLMetadataSegmentManager implements MetadataSegmentManager
 {
-  private static final Logger log = new Logger(SQLMetadataSegmentManager.class);
+  private static final EmittingLogger log = new EmittingLogger(SQLMetadataSegmentManager.class);
+
 
   private final Object lock = new Object();
 
@@ -76,7 +78,8 @@ public class SQLMetadataSegmentManager implements MetadataSegmentManager
   private final AtomicReference<ConcurrentHashMap<String, DruidDataSource>> dataSources;
   private final IDBI dbi;
 
-  private volatile ScheduledExecutorService exec;
+  private volatile ListeningScheduledExecutorService exec = null;
+  private volatile ListenableFuture<?> future = null;
 
   private volatile boolean started = false;
 
@@ -105,23 +108,28 @@ public class SQLMetadataSegmentManager implements MetadataSegmentManager
         return;
       }
 
-      this.exec = Execs.scheduledSingleThreaded("DatabaseSegmentManager-Exec--%d");
+      exec = MoreExecutors.listeningDecorator(Execs.scheduledSingleThreaded("DatabaseSegmentManager-Exec--%d"));
 
       final Duration delay = config.get().getPollDuration().toStandardDuration();
-      ScheduledExecutors.scheduleWithFixedDelay(
-          exec,
-          new Duration(0),
-          delay,
+      future = exec.scheduleWithFixedDelay(
           new Runnable()
           {
             @Override
             public void run()
             {
-              poll();
-            }
-          }
-      );
+              try {
+                poll();
+              }
+              catch (Exception e) {
+                log.makeAlert(e, "uncaught exception in segment manager polling thread").emit();
 
+              }
+            }
+          },
+          0,
+          delay.getMillis(),
+          TimeUnit.MILLISECONDS
+      );
       started = true;
     }
   }
@@ -136,6 +144,8 @@ public class SQLMetadataSegmentManager implements MetadataSegmentManager
 
       started = false;
       dataSources.set(new ConcurrentHashMap<String, DruidDataSource>());
+      future.cancel(false);
+      future = null;
       exec.shutdownNow();
       exec = null;
     }
@@ -487,7 +497,7 @@ public class SQLMetadataSegmentManager implements MetadataSegmentManager
       }
     }
     catch (Exception e) {
-      log.error(e, "Problem polling DB.");
+      log.makeAlert(e, "Problem polling DB.").emit();
     }
   }
 

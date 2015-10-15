@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.query.topn;
@@ -29,11 +27,13 @@ import io.druid.collections.StupidPool;
 import io.druid.granularity.QueryGranularity;
 import io.druid.query.Result;
 import io.druid.query.aggregation.AggregatorFactory;
+import io.druid.query.extraction.ExtractionFn;
 import io.druid.query.filter.Filter;
 import io.druid.segment.Capabilities;
 import io.druid.segment.Cursor;
 import io.druid.segment.SegmentMissingException;
 import io.druid.segment.StorageAdapter;
+import io.druid.segment.column.Column;
 import io.druid.segment.filter.Filters;
 import org.joda.time.Interval;
 
@@ -90,7 +90,10 @@ public class TopNQueryEngine
   private Function<Cursor, Result<TopNResultValue>> getMapFn(TopNQuery query, final StorageAdapter adapter)
   {
     final Capabilities capabilities = adapter.getCapabilities();
-    final int cardinality = adapter.getDimensionCardinality(query.getDimensionSpec().getDimension());
+    final String dimension = query.getDimensionSpec().getDimension();
+
+    final int cardinality = adapter.getDimensionCardinality(dimension);
+
     int numBytesPerRecord = 0;
     for (AggregatorFactory aggregatorFactory : query.getAggregatorSpecs()) {
       numBytesPerRecord += aggregatorFactory.getMaxIntermediateSize();
@@ -99,8 +102,18 @@ public class TopNQueryEngine
     final TopNAlgorithmSelector selector = new TopNAlgorithmSelector(cardinality, numBytesPerRecord);
     query.initTopNAlgorithmSelector(selector);
 
-    TopNAlgorithm topNAlgorithm = null;
-    if (selector.isHasDimExtractionFn()) {
+    final TopNAlgorithm topNAlgorithm;
+    if (
+        selector.isHasExtractionFn() &&
+        // TimeExtractionTopNAlgorithm can work on any single-value dimension of type long.
+        // Once we have arbitrary dimension types following check should be replaced by checking
+        // that the column is of type long and single-value.
+        dimension.equals(Column.TIME_COLUMN_NAME)
+        ) {
+      // A special TimeExtractionTopNAlgorithm is required, since DimExtractionTopNAlgorithm
+      // currently relies on the dimension cardinality to support lexicographic sorting
+      topNAlgorithm = new TimeExtractionTopNAlgorithm(capabilities, query);
+    } else if (selector.isHasExtractionFn()) {
       topNAlgorithm = new DimExtractionTopNAlgorithm(capabilities, query);
     } else if (selector.isAggregateAllMetrics()) {
       topNAlgorithm = new PooledTopNAlgorithm(capabilities, query, bufferPool);
@@ -111,5 +124,13 @@ public class TopNQueryEngine
     }
 
     return new TopNMapFn(query, topNAlgorithm);
+  }
+
+  public static boolean canApplyExtractionInPost(TopNQuery query)
+  {
+    return query.getDimensionSpec() != null
+           && query.getDimensionSpec().getExtractionFn() != null
+           && ExtractionFn.ExtractionType.ONE_TO_ONE.equals(query.getDimensionSpec().getExtractionFn().getExtractionType())
+           && query.getTopNMetricSpec().canBeOptimizedUnordered();
   }
 }

@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.indexing.overlord.http;
@@ -28,10 +26,11 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.google.common.io.ByteSource;
-import com.google.common.io.InputSupplier;
 import com.google.common.util.concurrent.SettableFuture;
 import com.google.inject.Inject;
 import com.metamx.common.logger.Logger;
+import io.druid.audit.AuditInfo;
+import io.druid.audit.AuditManager;
 import io.druid.common.config.JacksonConfigManager;
 import io.druid.indexing.common.TaskStatus;
 import io.druid.indexing.common.actions.TaskActionClient;
@@ -44,24 +43,26 @@ import io.druid.indexing.overlord.TaskRunnerWorkItem;
 import io.druid.indexing.overlord.TaskStorageQueryAdapter;
 import io.druid.indexing.overlord.autoscaling.ResourceManagementScheduler;
 import io.druid.indexing.overlord.setup.WorkerBehaviorConfig;
-import io.druid.indexing.overlord.setup.WorkerSetupData;
 import io.druid.metadata.EntryExistsException;
 import io.druid.tasklogs.TaskLogStreamer;
 import io.druid.timeline.DataSegment;
 import org.joda.time.DateTime;
+import org.joda.time.Interval;
 
+import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.DefaultValue;
 import javax.ws.rs.GET;
+import javax.ws.rs.HeaderParam;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
 import javax.ws.rs.QueryParam;
+import javax.ws.rs.core.Context;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -79,24 +80,24 @@ public class OverlordResource
   private final TaskStorageQueryAdapter taskStorageQueryAdapter;
   private final TaskLogStreamer taskLogStreamer;
   private final JacksonConfigManager configManager;
+  private final AuditManager auditManager;
 
   private AtomicReference<WorkerBehaviorConfig> workerConfigRef = null;
-
-  @Deprecated
-  private AtomicReference<WorkerSetupData> workerSetupDataRef = null;
 
   @Inject
   public OverlordResource(
       TaskMaster taskMaster,
       TaskStorageQueryAdapter taskStorageQueryAdapter,
       TaskLogStreamer taskLogStreamer,
-      JacksonConfigManager configManager
+      JacksonConfigManager configManager,
+      AuditManager auditManager
   ) throws Exception
   {
     this.taskMaster = taskMaster;
     this.taskStorageQueryAdapter = taskStorageQueryAdapter;
     this.taskLogStreamer = taskLogStreamer;
     this.configManager = configManager;
+    this.auditManager = auditManager;
   }
 
   @POST
@@ -124,6 +125,14 @@ public class OverlordResource
           }
         }
     );
+  }
+
+  @GET
+  @Path("/leader")
+  @Produces(MediaType.APPLICATION_JSON)
+  public Response getLeader()
+  {
+    return Response.ok(taskMaster.getLeader()).build();
   }
 
   @GET
@@ -182,14 +191,22 @@ public class OverlordResource
     return Response.ok(workerConfigRef.get()).build();
   }
 
+  // default value is used for backwards compatibility
   @POST
   @Path("/worker")
   @Consumes(MediaType.APPLICATION_JSON)
   public Response setWorkerConfig(
-      final WorkerBehaviorConfig workerBehaviorConfig
+      final WorkerBehaviorConfig workerBehaviorConfig,
+      @HeaderParam(AuditManager.X_DRUID_AUTHOR) @DefaultValue("") final String author,
+      @HeaderParam(AuditManager.X_DRUID_COMMENT) @DefaultValue("") final String comment,
+      @Context HttpServletRequest req
   )
   {
-    if (!configManager.set(WorkerBehaviorConfig.CONFIG_KEY, workerBehaviorConfig)) {
+    if (!configManager.set(
+        WorkerBehaviorConfig.CONFIG_KEY,
+        workerBehaviorConfig,
+        new AuditInfo(author, comment, req.getRemoteAddr())
+    )) {
       return Response.status(Response.Status.BAD_REQUEST).build();
     }
 
@@ -198,35 +215,22 @@ public class OverlordResource
     return Response.ok().build();
   }
 
-
-  @Deprecated
   @GET
-  @Path("/worker/setup")
+  @Path("/worker/history")
   @Produces(MediaType.APPLICATION_JSON)
-  public Response getWorkerSetupData()
-  {
-    if (workerSetupDataRef == null) {
-      workerSetupDataRef = configManager.watch(WorkerSetupData.CONFIG_KEY, WorkerSetupData.class);
-    }
-
-    return Response.ok(workerSetupDataRef.get()).build();
-  }
-
-  @Deprecated
-  @POST
-  @Path("/worker/setup")
-  @Consumes(MediaType.APPLICATION_JSON)
-  public Response setWorkerSetupData(
-      final WorkerSetupData workerSetupData
+  public Response getWorkerConfigHistory(
+      @QueryParam("interval") final String interval
   )
   {
-    if (!configManager.set(WorkerSetupData.CONFIG_KEY, workerSetupData)) {
-      return Response.status(Response.Status.BAD_REQUEST).build();
-    }
-
-    log.info("Updating Worker Setup configs: %s", workerSetupData);
-
-    return Response.ok().build();
+    Interval theInterval = interval == null ? null : new Interval(interval);
+    return Response.ok(
+        auditManager.fetchAuditHistory(
+            WorkerBehaviorConfig.CONFIG_KEY,
+            WorkerBehaviorConfig.CONFIG_KEY,
+            theInterval
+        )
+    )
+                   .build();
   }
 
   @POST
@@ -535,6 +539,9 @@ public class OverlordResource
       }
       if (status.isPresent()) {
         data.put("statusCode", status.get().getStatusCode().toString());
+        if(status.get().isComplete()) {
+          data.put("duration", status.get().getDuration());
+        }
       }
       return data;
     }

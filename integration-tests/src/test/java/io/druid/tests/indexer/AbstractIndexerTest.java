@@ -1,26 +1,26 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.tests.indexer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.inject.Inject;
+import io.druid.guice.annotations.Json;
+import io.druid.guice.annotations.Smile;
 import io.druid.testing.clients.CoordinatorResourceTestClient;
 import io.druid.testing.clients.OverlordResourceTestClient;
 import io.druid.testing.utils.FromFileTestQueryHelper;
@@ -30,7 +30,6 @@ import org.joda.time.Interval;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.StringWriter;
 import java.util.concurrent.Callable;
 
 public abstract class AbstractIndexerTest
@@ -41,8 +40,11 @@ public abstract class AbstractIndexerTest
   @Inject
   protected OverlordResourceTestClient indexer;
   @Inject
+  @Json
   protected ObjectMapper jsonMapper;
-
+  @Inject
+  @Smile
+  protected ObjectMapper smileMapper;
   @Inject
   protected FromFileTestQueryHelper queryHelper;
 
@@ -76,10 +78,13 @@ public abstract class AbstractIndexerTest
 
   protected String getTaskAsString(String file) throws IOException
   {
-    InputStream inputStream = ITRealtimeIndexTaskTest.class.getResourceAsStream(file);
-    StringWriter writer = new StringWriter();
-    IOUtils.copy(inputStream, writer, "UTF-8");
-    return writer.toString();
+    final InputStream inputStream = ITRealtimeIndexTaskTest.class.getResourceAsStream(file);
+    try {
+      return IOUtils.toString(inputStream, "UTF-8");
+    }
+    finally {
+      IOUtils.closeQuietly(inputStream);
+    }
   }
 
 }

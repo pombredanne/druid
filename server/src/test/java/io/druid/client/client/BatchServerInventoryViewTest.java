@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.client.client;
@@ -23,8 +21,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
 import com.google.common.base.Stopwatch;
+import com.google.common.base.Throwables;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.metamx.common.ISE;
 import io.druid.client.BatchServerInventoryView;
@@ -42,7 +44,9 @@ import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.curator.test.TestingCluster;
+import org.apache.curator.test.Timing;
 import org.easymock.EasyMock;
+import org.easymock.IAnswer;
 import org.easymock.LogicalOperator;
 import org.joda.time.DateTime;
 import org.joda.time.Interval;
@@ -54,9 +58,15 @@ import org.junit.Test;
 import org.junit.rules.ExpectedException;
 
 import javax.annotation.Nullable;
+import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  */
@@ -65,6 +75,7 @@ public class BatchServerInventoryViewTest
   private static final String testBasePath = "/test";
   public static final DateTime SEGMENT_INTERVAL_START = new DateTime("2013-01-01");
   public static final int INITIAL_SEGMENTS = 100;
+  private static final Timing timing = new Timing();
 
   private TestingCluster testingCluster;
   private CuratorFramework cf;
@@ -74,6 +85,7 @@ public class BatchServerInventoryViewTest
   private Set<DataSegment> testSegments;
   private BatchServerInventoryView batchServerInventoryView;
   private BatchServerInventoryView filteredBatchServerInventoryView;
+  private final AtomicInteger inventoryUpdateCounter = new AtomicInteger();
 
   @Rule
   public ExpectedException exception = ExpectedException.none();
@@ -130,7 +142,7 @@ public class BatchServerInventoryViewTest
     );
     segmentAnnouncer.start();
 
-    testSegments = Sets.newHashSet();
+    testSegments = Sets.newConcurrentHashSet();
     for (int i = 0; i < INITIAL_SEGMENTS; i++) {
       testSegments.add(makeSegment(i));
     }
@@ -150,7 +162,7 @@ public class BatchServerInventoryViewTest
     );
 
     batchServerInventoryView.start();
-
+    inventoryUpdateCounter.set(0);
     filteredBatchServerInventoryView = new BatchServerInventoryView(
         new ZkPathsConfig()
         {
@@ -170,8 +182,17 @@ public class BatchServerInventoryViewTest
             return dataSegment.getInterval().getStart().isBefore(SEGMENT_INTERVAL_START.plusDays(INITIAL_SEGMENTS));
           }
         }
-    );
-
+    ){
+      @Override
+      protected DruidServer addInnerInventory(
+          DruidServer container, String inventoryKey, Set<DataSegment> inventory
+      )
+      {
+        DruidServer server = super.addInnerInventory(container, inventoryKey, inventory);
+        inventoryUpdateCounter.incrementAndGet();
+        return server;
+      }
+    };
     filteredBatchServerInventoryView.start();
   }
 
@@ -231,19 +252,24 @@ public class BatchServerInventoryViewTest
     Set<DataSegment> segments = Sets.newHashSet(server.getSegments().values());
 
     Assert.assertEquals(testSegments, segments);
-
+    int prevUpdateCount = inventoryUpdateCounter.get();
     // segment outside the range of default filter
     DataSegment segment1 = makeSegment(101);
     segmentAnnouncer.announceSegment(segment1);
     testSegments.add(segment1);
 
-    exception.expect(ISE.class);
-    waitForSync(filteredBatchServerInventoryView, testSegments);
+    waitForUpdateEvents(prevUpdateCount + 1);
+    Assert.assertNull(
+        Iterables.getOnlyElement(filteredBatchServerInventoryView.getInventory())
+                 .getSegment(segment1.getIdentifier())
+    );
   }
 
   @Test
   public void testRunWithFilterCallback() throws Exception
   {
+    final CountDownLatch removeCallbackLatch = new CountDownLatch(1);
+
     segmentAnnouncer.announceSegments(testSegments);
 
     waitForSync(filteredBatchServerInventoryView, testSegments);
@@ -280,7 +306,17 @@ public class BatchServerInventoryViewTest
                 EasyMock.cmp(makeSegment(INITIAL_SEGMENTS + 2), dataSegmentComparator, LogicalOperator.EQUAL)
             )
         )
-        .andReturn(ServerView.CallbackAction.CONTINUE)
+        .andAnswer(
+            new IAnswer<ServerView.CallbackAction>()
+            {
+              @Override
+              public ServerView.CallbackAction answer() throws Throwable
+              {
+                removeCallbackLatch.countDown();
+                return ServerView.CallbackAction.CONTINUE;
+              }
+            }
+        )
         .times(1);
 
 
@@ -316,6 +352,8 @@ public class BatchServerInventoryViewTest
     testSegments.remove(segment2);
 
     waitForSync(filteredBatchServerInventoryView, testSegments);
+    timing.forWaiting().awaitLatch(removeCallbackLatch);
+
     EasyMock.verify(callback);
   }
 
@@ -333,15 +371,122 @@ public class BatchServerInventoryViewTest
                       .build();
   }
 
-  private static void waitForSync(BatchServerInventoryView batchServerInventoryView, Set<DataSegment> testSegments) throws Exception
+  private static void waitForSync(BatchServerInventoryView batchServerInventoryView, Set<DataSegment> testSegments)
+      throws Exception
   {
+    final Timing forWaitingTiming = timing.forWaiting();
     Stopwatch stopwatch = Stopwatch.createStarted();
     while (Iterables.isEmpty(batchServerInventoryView.getInventory())
            || Iterables.get(batchServerInventoryView.getInventory(), 0).getSegments().size() != testSegments.size()) {
-      Thread.sleep(500);
-      if (stopwatch.elapsed(TimeUnit.MILLISECONDS) > 2000) {
+      Thread.sleep(100);
+      if (stopwatch.elapsed(TimeUnit.MILLISECONDS) > forWaitingTiming.milliseconds()) {
         throw new ISE("BatchServerInventoryView is not updating");
       }
     }
+  }
+
+  private void waitForUpdateEvents(int count)
+      throws Exception
+  {
+    final Timing forWaitingTiming = timing.forWaiting();
+    Stopwatch stopwatch = Stopwatch.createStarted();
+    while (inventoryUpdateCounter.get() != count) {
+      Thread.sleep(100);
+      if (stopwatch.elapsed(TimeUnit.MILLISECONDS) > forWaitingTiming.milliseconds()) {
+        throw new ISE("BatchServerInventoryView is not updating counter expected[%d] value[%d]", count, inventoryUpdateCounter.get());
+      }
+    }
+  }
+
+  @Test
+  public void testSameTimeZnode() throws Exception
+  {
+    final int numThreads = INITIAL_SEGMENTS / 10;
+    final ListeningExecutorService executor = MoreExecutors.listeningDecorator(Executors.newFixedThreadPool(numThreads));
+
+    segmentAnnouncer.announceSegments(testSegments);
+
+    waitForSync(batchServerInventoryView, testSegments);
+
+    DruidServer server = Iterables.get(batchServerInventoryView.getInventory(), 0);
+    final Set<DataSegment> segments = Sets.newHashSet(server.getSegments().values());
+
+    Assert.assertEquals(testSegments, segments);
+
+    final CountDownLatch latch = new CountDownLatch(numThreads);
+
+    final List<ListenableFuture<BatchDataSegmentAnnouncer>> futures = new ArrayList<>();
+    for (int i = 0; i < numThreads; ++i) {
+      final int ii = i;
+      futures.add(
+          executor.submit(
+              new Callable<BatchDataSegmentAnnouncer>()
+              {
+                @Override
+                public BatchDataSegmentAnnouncer call()
+                {
+                  BatchDataSegmentAnnouncer segmentAnnouncer = new BatchDataSegmentAnnouncer(
+                      new DruidServerMetadata(
+                          "id",
+                          "host",
+                          Long.MAX_VALUE,
+                          "type",
+                          "tier",
+                          0
+                      ),
+                      new BatchDataSegmentAnnouncerConfig()
+                      {
+                        @Override
+                        public int getSegmentsPerNode()
+                        {
+                          return 50;
+                        }
+                      },
+                      new ZkPathsConfig()
+                      {
+                        @Override
+                        public String getBase()
+                        {
+                          return testBasePath;
+                        }
+                      },
+                      announcer,
+                      jsonMapper
+                  );
+                  segmentAnnouncer.start();
+                  List<DataSegment> segments = new ArrayList<DataSegment>();
+                  try {
+                    for (int j = 0; j < INITIAL_SEGMENTS / numThreads; ++j) {
+                      segments.add(makeSegment(INITIAL_SEGMENTS + ii  + numThreads * j));
+                    }
+                    latch.countDown();
+                    latch.await();
+                    segmentAnnouncer.announceSegments(segments);
+                    testSegments.addAll(segments);
+                  }
+                  catch (Exception e) {
+                    throw Throwables.propagate(e);
+                  }
+                  return segmentAnnouncer;
+                }
+              }
+          )
+      );
+    }
+    final List<BatchDataSegmentAnnouncer> announcers = Futures.<BatchDataSegmentAnnouncer>allAsList(futures).get();
+    Assert.assertEquals(INITIAL_SEGMENTS * 2, testSegments.size());
+    waitForSync(batchServerInventoryView, testSegments);
+
+    Assert.assertEquals(testSegments, Sets.newHashSet(server.getSegments().values()));
+
+    for (int i = 0; i < INITIAL_SEGMENTS; ++i) {
+      final DataSegment segment = makeSegment(100 + i);
+      segmentAnnouncer.unannounceSegment(segment);
+      testSegments.remove(segment);
+    }
+
+    waitForSync(batchServerInventoryView, testSegments);
+
+    Assert.assertEquals(testSegments, Sets.newHashSet(server.getSegments().values()));
   }
 }

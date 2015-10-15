@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013, 2014  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.segment.incremental;
@@ -22,6 +20,7 @@ package io.druid.segment.incremental;
 import com.carrotsearch.junitbenchmarks.AbstractBenchmark;
 import com.carrotsearch.junitbenchmarks.BenchmarkOptions;
 import com.carrotsearch.junitbenchmarks.Clock;
+import com.google.common.base.Supplier;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -36,7 +35,6 @@ import io.druid.data.input.MapBasedInputRow;
 import io.druid.granularity.QueryGranularity;
 import io.druid.query.Druids;
 import io.druid.query.FinalizeResultsQueryRunner;
-import io.druid.query.QueryConfig;
 import io.druid.query.QueryRunner;
 import io.druid.query.QueryRunnerFactory;
 import io.druid.query.QueryRunnerTestHelper;
@@ -55,6 +53,7 @@ import io.druid.segment.IncrementalIndexSegment;
 import io.druid.segment.Segment;
 import org.joda.time.Interval;
 import org.junit.Assert;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
@@ -137,7 +136,8 @@ public class OnheapIncrementalIndexBenchmark extends AbstractBenchmark
         InputRow row,
         AtomicInteger numEntries,
         TimeAndDims key,
-        ThreadLocal<InputRow> in
+        ThreadLocal<InputRow> rowContainer,
+        Supplier<InputRow> rowSupplier
     ) throws IndexSizeExceededException
     {
 
@@ -149,10 +149,11 @@ public class OnheapIncrementalIndexBenchmark extends AbstractBenchmark
         aggs = indexedMap.get(priorIdex);
       } else {
         aggs = new Aggregator[metrics.length];
+
         for (int i = 0; i < metrics.length; i++) {
           final AggregatorFactory agg = metrics[i];
           aggs[i] = agg.factorize(
-              makeColumnSelectorFactory(agg, in, deserializeComplexMetrics)
+              makeColumnSelectorFactory(agg, rowSupplier, deserializeComplexMetrics)
           );
         }
         Integer rowIndex;
@@ -178,7 +179,7 @@ public class OnheapIncrementalIndexBenchmark extends AbstractBenchmark
         }
       }
 
-      in.set(row);
+      rowContainer.set(row);
 
       for (Aggregator agg : aggs) {
         synchronized (agg) {
@@ -186,13 +187,12 @@ public class OnheapIncrementalIndexBenchmark extends AbstractBenchmark
         }
       }
 
-      in.set(null);
+      rowContainer.set(null);
 
 
       return numEntries.get();
     }
   }
-
 
   @Parameterized.Parameters
   public static Collection<Object[]> getParameters()
@@ -223,7 +223,7 @@ public class OnheapIncrementalIndexBenchmark extends AbstractBenchmark
     return new MapBasedInputRow(timestamp, dimensionList, builder.build());
   }
 
-  @Test
+  @Ignore @Test
   @BenchmarkOptions(callgc = true, clock = Clock.REAL_TIME, warmupRounds = 10, benchmarkRounds = 20)
   public void testConcurrentAddRead()
       throws InterruptedException, ExecutionException, NoSuchMethodException, IllegalAccessException,
@@ -282,7 +282,7 @@ public class OnheapIncrementalIndexBenchmark extends AbstractBenchmark
     final List<ListenableFuture<?>> queryFutures = new LinkedList<>();
     final Segment incrementalIndexSegment = new IncrementalIndexSegment(incrementalIndex, null);
     final QueryRunnerFactory factory = new TimeseriesQueryRunnerFactory(
-        new TimeseriesQueryQueryToolChest(new QueryConfig()),
+        new TimeseriesQueryQueryToolChest(QueryRunnerTestHelper.NoopIntervalChunkingQueryRunnerDecorator()),
         new TimeseriesQueryEngine(),
         QueryRunnerTestHelper.NOOP_QUERYWATCHER
     );

@@ -1,26 +1,27 @@
 /*
- * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
- */
+* Licensed to Metamarkets Group Inc. (Metamarkets) under one
+* or more contributor license agreements. See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership. Metamarkets licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License. You may obtain a copy of the License at
+*
+* http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied. See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
 
 package io.druid.segment;
 
+import com.google.common.base.Function;
+import com.google.common.collect.FluentIterable;
 import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
 import com.google.common.collect.Sets;
 import com.metamx.common.ISE;
 import com.metamx.common.guava.CloseQuietly;
@@ -47,7 +48,6 @@ import java.io.Closeable;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Set;
 
@@ -174,7 +174,7 @@ public class QueryableIndexIndexableAdapter implements IndexableAdapter
           final GenericColumn timestamps = input.getColumn(Column.TIME_COLUMN_NAME).getGenericColumn();
           final Object[] metrics;
 
-          final Map<String, DictionaryEncodedColumn> dimensions;
+          final DictionaryEncodedColumn[] dictionaryEncodedColumns;
 
           final int numMetrics = getMetricNames().size();
 
@@ -182,10 +182,19 @@ public class QueryableIndexIndexableAdapter implements IndexableAdapter
           boolean done = false;
 
           {
-            dimensions = Maps.newLinkedHashMap();
-            for (String dim : getDimensionNames()) {
-              dimensions.put(dim, input.getColumn(dim).getDictionaryEncoding());
-            }
+            this.dictionaryEncodedColumns = FluentIterable
+                .from(getDimensionNames())
+                .transform(
+                    new Function<String, DictionaryEncodedColumn>()
+                    {
+                      @Override
+                      public DictionaryEncodedColumn apply(String dimName)
+                      {
+                        return input.getColumn(dimName)
+                                    .getDictionaryEncoding();
+                      }
+                    }
+                ).toArray(DictionaryEncodedColumn.class);
 
             final Indexed<String> availableMetrics = getMetricNames();
             metrics = new Object[availableMetrics.size()];
@@ -217,6 +226,11 @@ public class QueryableIndexIndexableAdapter implements IndexableAdapter
                   CloseQuietly.close((Closeable) metric);
                 }
               }
+              for (Object dimension : dictionaryEncodedColumns) {
+                if (dimension instanceof Closeable) {
+                  CloseQuietly.close((Closeable) dimension);
+                }
+              }
               done = true;
             }
             return hasNext;
@@ -229,10 +243,9 @@ public class QueryableIndexIndexableAdapter implements IndexableAdapter
               throw new NoSuchElementException();
             }
 
-            int[][] dims = new int[dimensions.size()][];
+            final int[][] dims = new int[dictionaryEncodedColumns.length][];
             int dimIndex = 0;
-            for (String dim : dimensions.keySet()) {
-              final DictionaryEncodedColumn dict = dimensions.get(dim);
+            for (final DictionaryEncodedColumn dict : dictionaryEncodedColumns) {
               final IndexedInts dimVals;
               if (dict.hasMultipleValues()) {
                 dimVals = dict.getMultiValueRow(currRow);

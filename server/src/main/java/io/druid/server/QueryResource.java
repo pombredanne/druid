@@ -1,58 +1,49 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.server;
 
-import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
 import com.fasterxml.jackson.jaxrs.smile.SmileMediaTypes;
-import com.google.common.base.Charsets;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.MapMaker;
-import com.google.common.io.ByteStreams;
 import com.google.inject.Inject;
 import com.metamx.common.guava.Sequence;
 import com.metamx.common.guava.Sequences;
 import com.metamx.common.guava.Yielder;
 import com.metamx.common.guava.YieldingAccumulator;
-import com.metamx.common.StringUtils;
 import com.metamx.emitter.EmittingLogger;
 import com.metamx.emitter.service.ServiceEmitter;
 import io.druid.guice.annotations.Json;
 import io.druid.guice.annotations.Smile;
 import io.druid.query.Query;
+import io.druid.query.QueryContextKeys;
 import io.druid.query.QueryInterruptedException;
-import io.druid.query.QueryMetricUtil;
+import io.druid.query.DruidMetrics;
 import io.druid.query.QuerySegmentWalker;
 import io.druid.server.initialization.ServerConfig;
 import io.druid.server.log.RequestLogger;
 import org.joda.time.DateTime;
 
-import javax.servlet.ServletException;
 import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletResponse;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.DELETE;
-import javax.ws.rs.GET;
-import javax.ws.rs.HeaderParam;
 import javax.ws.rs.POST;
 import javax.ws.rs.Path;
 import javax.ws.rs.PathParam;
@@ -98,12 +89,8 @@ public class QueryResource
   )
   {
     this.config = config;
-    this.jsonMapper = jsonMapper.copy();
-    this.jsonMapper.getFactory().configure(JsonGenerator.Feature.AUTO_CLOSE_TARGET, false);
-
-    this.smileMapper = smileMapper.copy();
-    this.smileMapper.getFactory().configure(JsonGenerator.Feature.AUTO_CLOSE_TARGET, false);
-
+    this.jsonMapper = jsonMapper;
+    this.smileMapper = smileMapper;
     this.texasRanger = texasRanger;
     this.emitter = emitter;
     this.requestLogger = requestLogger;
@@ -126,7 +113,7 @@ public class QueryResource
   public Response doPost(
       InputStream in,
       @QueryParam("pretty") String pretty,
-      @Context HttpServletRequest req // used only to get request content-type and remote address
+      @Context final HttpServletRequest req // used only to get request content-type and remote address
   ) throws IOException
   {
     final long start = System.currentTimeMillis();
@@ -134,7 +121,8 @@ public class QueryResource
     String queryId = null;
 
     final String reqContentType = req.getContentType();
-    final boolean isSmile = SmileMediaTypes.APPLICATION_JACKSON_SMILE.equals(reqContentType) || APPLICATION_SMILE.equals(reqContentType);
+    final boolean isSmile = SmileMediaTypes.APPLICATION_JACKSON_SMILE.equals(reqContentType)
+                            || APPLICATION_SMILE.equals(reqContentType);
     final String contentType = isSmile ? SmileMediaTypes.APPLICATION_JACKSON_SMILE : MediaType.APPLICATION_JSON;
 
     ObjectMapper objectMapper = isSmile ? smileMapper : jsonMapper;
@@ -149,10 +137,10 @@ public class QueryResource
         queryId = UUID.randomUUID().toString();
         query = query.withId(queryId);
       }
-      if (query.getContextValue("timeout") == null) {
+      if (query.getContextValue(QueryContextKeys.TIMEOUT) == null) {
         query = query.withOverriddenContext(
             ImmutableMap.of(
-                "timeout",
+                QueryContextKeys.TIMEOUT,
                 config.getMaxIdleTime().toStandardDuration().getMillis()
             )
         );
@@ -185,27 +173,7 @@ public class QueryResource
       );
 
       try {
-        long requestTime = System.currentTimeMillis() - start;
-
-        emitter.emit(
-            QueryMetricUtil.makeRequestTimeMetric(jsonMapper, query, req.getRemoteAddr())
-                           .build("request/time", requestTime)
-        );
-
-        requestLogger.log(
-            new RequestLogLine(
-                new DateTime(),
-                req.getRemoteAddr(),
-                query,
-                new QueryStats(
-                    ImmutableMap.<String, Object>of(
-                        "request/time", requestTime,
-                        "success", true
-                    )
-                )
-            )
-        );
-
+        final Query theQuery = query;
         return Response
             .ok(
                 new StreamingOutput()
@@ -215,17 +183,38 @@ public class QueryResource
                   {
                     // json serializer will always close the yielder
                     jsonWriter.writeValue(outputStream, yielder);
+                    outputStream.flush(); // Some types of OutputStream suppress flush errors in the .close() method.
                     outputStream.close();
+
+                    final long queryTime = System.currentTimeMillis() - start;
+                    emitter.emit(
+                        DruidMetrics.makeQueryTimeMetric(jsonMapper, theQuery, req.getRemoteAddr())
+                                       .build("query/time", queryTime)
+                    );
+
+                    requestLogger.log(
+                        new RequestLogLine(
+                            new DateTime(),
+                            req.getRemoteAddr(),
+                            theQuery,
+                            new QueryStats(
+                                ImmutableMap.<String, Object>of(
+                                    "query/time", queryTime,
+                                    "success", true
+                                )
+                            )
+                        )
+                    );
                   }
                 },
                 contentType
-        )
+            )
             .header("X-Druid-Query-Id", queryId)
             .header("X-Druid-Response-Context", jsonMapper.writeValueAsString(responseContext))
             .build();
       }
       catch (Exception e) {
-        // make sure to close yieder if anything happened before starting to serialize the response.
+        // make sure to close yielder if anything happened before starting to serialize the response.
         yielder.close();
         throw Throwables.propagate(e);
       }

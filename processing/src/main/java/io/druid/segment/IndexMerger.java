@@ -1,21 +1,21 @@
 /*
- * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
- */
+* Licensed to Metamarkets Group Inc. (Metamarkets) under one
+* or more contributor license agreements. See the NOTICE file
+* distributed with this work for additional information
+* regarding copyright ownership. Metamarkets licenses this file
+* to you under the Apache License, Version 2.0 (the
+* "License"); you may not use this file except in compliance
+* with the License. You may obtain a copy of the License at
+*
+* http://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing,
+* software distributed under the License is distributed on an
+* "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+* KIND, either express or implied. See the License for the
+* specific language governing permissions and limitations
+* under the License.
+*/
 
 package io.druid.segment;
 
@@ -45,7 +45,6 @@ import com.metamx.collections.spatial.RTree;
 import com.metamx.collections.spatial.split.LinearGutmanSplitStrategy;
 import com.metamx.common.IAE;
 import com.metamx.common.ISE;
-import com.metamx.common.guava.CloseQuietly;
 import com.metamx.common.guava.FunctionalIterable;
 import com.metamx.common.guava.MergeIterable;
 import com.metamx.common.guava.nary.BinaryFn;
@@ -111,7 +110,6 @@ public class IndexMerger
   private static final Splitter SPLITTER = Splitter.on(",");
 
   private static final ObjectMapper mapper;
-  private static final BitmapSerdeFactory bitmapSerdeFactory;
 
   static {
     final Injector injector = GuiceInjectors.makeStartupInjectorWithModules(
@@ -127,13 +125,17 @@ public class IndexMerger
         )
     );
     mapper = injector.getInstance(ObjectMapper.class);
-    bitmapSerdeFactory = injector.getInstance(BitmapSerdeFactory.class);
   }
 
 
-  public static File persist(final IncrementalIndex index, File outDir) throws IOException
+  public static File persist(
+      final IncrementalIndex index,
+      File outDir,
+      Map<String, Object> segmentMetadata,
+      IndexSpec indexSpec
+  ) throws IOException
   {
-    return persist(index, index.getInterval(), outDir);
+    return persist(index, index.getInterval(), outDir, segmentMetadata, indexSpec);
   }
 
   /**
@@ -148,13 +150,24 @@ public class IndexMerger
    *
    * @throws java.io.IOException if an IO error occurs persisting the index
    */
-  public static File persist(final IncrementalIndex index, final Interval dataInterval, File outDir) throws IOException
+  public static File persist(
+      final IncrementalIndex index,
+      final Interval dataInterval,
+      File outDir,
+      Map<String, Object> segmentMetadata,
+      IndexSpec indexSpec
+  ) throws IOException
   {
-    return persist(index, dataInterval, outDir, new BaseProgressIndicator());
+    return persist(index, dataInterval, outDir, segmentMetadata, indexSpec, new BaseProgressIndicator());
   }
 
   public static File persist(
-      final IncrementalIndex index, final Interval dataInterval, File outDir, ProgressIndicator progress
+      final IncrementalIndex index,
+      final Interval dataInterval,
+      File outDir,
+      Map<String, Object> segmentMetadata,
+      IndexSpec indexSpec,
+      ProgressIndicator progress
   ) throws IOException
   {
     if (index.isEmpty()) {
@@ -185,24 +198,30 @@ public class IndexMerger
             new IncrementalIndexAdapter(
                 dataInterval,
                 index,
-                bitmapSerdeFactory.getBitmapFactory()
+                indexSpec.getBitmapSerdeFactory().getBitmapFactory()
             )
         ),
         index.getMetricAggs(),
         outDir,
+        segmentMetadata,
+        indexSpec,
         progress
     );
   }
 
   public static File mergeQueryableIndex(
-      List<QueryableIndex> indexes, final AggregatorFactory[] metricAggs, File outDir
+      List<QueryableIndex> indexes, final AggregatorFactory[] metricAggs, File outDir, IndexSpec indexSpec
   ) throws IOException
   {
-    return mergeQueryableIndex(indexes, metricAggs, outDir, new BaseProgressIndicator());
+    return mergeQueryableIndex(indexes, metricAggs, outDir, indexSpec, new BaseProgressIndicator());
   }
 
   public static File mergeQueryableIndex(
-      List<QueryableIndex> indexes, final AggregatorFactory[] metricAggs, File outDir, ProgressIndicator progress
+      List<QueryableIndex> indexes,
+      final AggregatorFactory[] metricAggs,
+      File outDir,
+      IndexSpec indexSpec,
+      ProgressIndicator progress
   ) throws IOException
   {
     return merge(
@@ -219,19 +238,30 @@ public class IndexMerger
         ),
         metricAggs,
         outDir,
+        null,
+        indexSpec,
         progress
     );
   }
 
   public static File merge(
-      List<IndexableAdapter> indexes, final AggregatorFactory[] metricAggs, File outDir
+      List<IndexableAdapter> indexes,
+      final AggregatorFactory[] metricAggs,
+      File outDir,
+      Map<String, Object> segmentMetadata,
+      IndexSpec indexSpec
   ) throws IOException
   {
-    return merge(indexes, metricAggs, outDir, new BaseProgressIndicator());
+    return merge(indexes, metricAggs, outDir, segmentMetadata, indexSpec, new BaseProgressIndicator());
   }
 
   public static File merge(
-      List<IndexableAdapter> indexes, final AggregatorFactory[] metricAggs, File outDir, ProgressIndicator progress
+      List<IndexableAdapter> indexes,
+      final AggregatorFactory[] metricAggs,
+      File outDir,
+      Map<String, Object> segmentMetadata,
+      IndexSpec indexSpec,
+      ProgressIndicator progress
   ) throws IOException
   {
     FileUtils.deleteDirectory(outDir);
@@ -318,18 +348,60 @@ public class IndexMerger
       }
     };
 
-    return makeIndexFiles(indexes, outDir, progress, mergedDimensions, mergedMetrics, rowMergerFn);
+    return makeIndexFiles(
+        indexes,
+        outDir,
+        progress,
+        mergedDimensions,
+        mergedMetrics,
+        segmentMetadata,
+        rowMergerFn,
+        indexSpec
+    );
   }
 
-  public static File append(
-      List<IndexableAdapter> indexes, File outDir
+  // Faster than IndexMaker
+  public static File convert(final File inDir, final File outDir, final IndexSpec indexSpec) throws IOException
+  {
+    return convert(inDir, outDir, indexSpec, new BaseProgressIndicator());
+  }
+
+  public static File convert(
+      final File inDir, final File outDir, final IndexSpec indexSpec, final ProgressIndicator progress
   ) throws IOException
   {
-    return append(indexes, outDir, new BaseProgressIndicator());
+    try (QueryableIndex index = IndexIO.loadIndex(inDir)) {
+      final IndexableAdapter adapter = new QueryableIndexIndexableAdapter(index);
+      return makeIndexFiles(
+          ImmutableList.of(adapter),
+          outDir,
+          progress,
+          Lists.newArrayList(adapter.getDimensionNames()),
+          Lists.newArrayList(adapter.getMetricNames()),
+          null,
+          new Function<ArrayList<Iterable<Rowboat>>, Iterable<Rowboat>>()
+          {
+            @Nullable
+            @Override
+            public Iterable<Rowboat> apply(ArrayList<Iterable<Rowboat>> input)
+            {
+              return input.get(0);
+            }
+          },
+          indexSpec
+      );
+    }
   }
 
   public static File append(
-      List<IndexableAdapter> indexes, File outDir, ProgressIndicator progress
+      List<IndexableAdapter> indexes, File outDir, IndexSpec indexSpec
+  ) throws IOException
+  {
+    return append(indexes, outDir, indexSpec, new BaseProgressIndicator());
+  }
+
+  public static File append(
+      List<IndexableAdapter> indexes, File outDir, IndexSpec indexSpec, ProgressIndicator progress
   ) throws IOException
   {
     FileUtils.deleteDirectory(outDir);
@@ -398,7 +470,7 @@ public class IndexMerger
       }
     };
 
-    return makeIndexFiles(indexes, outDir, progress, mergedDimensions, mergedMetrics, rowMergerFn);
+    return makeIndexFiles(indexes, outDir, progress, mergedDimensions, mergedMetrics, null, rowMergerFn, indexSpec);
   }
 
   private static File makeIndexFiles(
@@ -407,7 +479,9 @@ public class IndexMerger
       final ProgressIndicator progress,
       final List<String> mergedDimensions,
       final List<String> mergedMetrics,
-      final Function<ArrayList<Iterable<Rowboat>>, Iterable<Rowboat>> rowMergerFn
+      final Map<String, Object> segmentMetadata,
+      final Function<ArrayList<Iterable<Rowboat>>, Iterable<Rowboat>> rowMergerFn,
+      final IndexSpec indexSpec
   ) throws IOException
   {
     final Map<String, ValueType> valueTypes = Maps.newTreeMap(Ordering.<String>natural().nullsFirst());
@@ -447,15 +521,12 @@ public class IndexMerger
     long startTime = System.currentTimeMillis();
     File indexFile = new File(v8OutDir, "index.drd");
 
-    FileOutputStream fileOutputStream = null;
-    FileChannel channel = null;
-    try {
-      fileOutputStream = new FileOutputStream(indexFile);
-      channel = fileOutputStream.getChannel();
+    try (FileOutputStream fileOutputStream = new FileOutputStream(indexFile);
+         FileChannel channel = fileOutputStream.getChannel()) {
       channel.write(ByteBuffer.wrap(new byte[]{IndexIO.V8_VERSION}));
 
-      GenericIndexed.fromIterable(mergedDimensions, GenericIndexed.stringStrategy).writeToChannel(channel);
-      GenericIndexed.fromIterable(mergedMetrics, GenericIndexed.stringStrategy).writeToChannel(channel);
+      GenericIndexed.fromIterable(mergedDimensions, GenericIndexed.STRING_STRATEGY).writeToChannel(channel);
+      GenericIndexed.fromIterable(mergedMetrics, GenericIndexed.STRING_STRATEGY).writeToChannel(channel);
 
       DateTime minTime = new DateTime(JodaUtils.MAX_INSTANT);
       DateTime maxTime = new DateTime(JodaUtils.MIN_INSTANT);
@@ -467,13 +538,7 @@ public class IndexMerger
 
       dataInterval = new Interval(minTime, maxTime);
       serializerUtils.writeString(channel, String.format("%s/%s", minTime, maxTime));
-      serializerUtils.writeString(channel, mapper.writeValueAsString(bitmapSerdeFactory));
-    }
-    finally {
-      CloseQuietly.close(channel);
-      channel = null;
-      CloseQuietly.close(fileOutputStream);
-      fileOutputStream = null;
+      serializerUtils.writeString(channel, mapper.writeValueAsString(indexSpec.getBitmapSerdeFactory()));
     }
     IndexIO.checkFileSize(indexFile);
     log.info("outDir[%s] completed index.drd in %,d millis.", v8OutDir, System.currentTimeMillis() - startTime);
@@ -493,7 +558,7 @@ public class IndexMerger
 
     for (String dimension : mergedDimensions) {
       final GenericIndexedWriter<String> writer = new GenericIndexedWriter<String>(
-          ioPeon, dimension, GenericIndexed.stringStrategy
+          ioPeon, dimension, GenericIndexed.STRING_STRATEGY
       );
       writer.open();
 
@@ -501,7 +566,7 @@ public class IndexMerger
       DimValueConverter[] converters = new DimValueConverter[indexes.size()];
       for (int i = 0; i < indexes.size(); i++) {
         Indexed<String> dimValues = indexes.get(i).getDimValueLookup(dimension);
-        if (dimValues != null) {
+        if (!isNullColumn(dimValues)) {
           dimValueLookups.add(dimValues);
           converters[i] = new DimValueConverter(dimValues);
         }
@@ -763,9 +828,10 @@ public class IndexMerger
       if (!dimension.equals(serializerUtils.readString(dimValsMapped))) {
         throw new ISE("dimensions[%s] didn't equate!?  This is a major WTF moment.", dimension);
       }
-      Indexed<String> dimVals = GenericIndexed.read(dimValsMapped, GenericIndexed.stringStrategy);
+      Indexed<String> dimVals = GenericIndexed.read(dimValsMapped, GenericIndexed.STRING_STRATEGY);
       log.info("Starting dimension[%s] with cardinality[%,d]", dimension, dimVals.size());
 
+      final BitmapSerdeFactory bitmapSerdeFactory = indexSpec.getBitmapSerdeFactory();
       GenericIndexedWriter<ImmutableBitmap> writer = new GenericIndexedWriter<>(
           ioPeon, dimension, bitmapSerdeFactory.getObjectStrategy()
       );
@@ -851,6 +917,13 @@ public class IndexMerger
         )
     );
 
+    if (segmentMetadata != null && !segmentMetadata.isEmpty()) {
+      writeMetadataToFile(new File(v8OutDir, "metadata.drd"), segmentMetadata);
+      log.info("wrote metadata.drd in outDir[%s].", v8OutDir);
+
+      expectedFiles.add("metadata.drd");
+    }
+
     Map<String, File> files = Maps.newLinkedHashMap();
     for (String fileName : expectedFiles) {
       files.put(fileName, new File(v8OutDir, fileName));
@@ -875,12 +948,13 @@ public class IndexMerger
     createIndexDrdFile(
         IndexIO.V8_VERSION,
         v8OutDir,
-        GenericIndexed.fromIterable(mergedDimensions, GenericIndexed.stringStrategy),
-        GenericIndexed.fromIterable(mergedMetrics, GenericIndexed.stringStrategy),
-        dataInterval
+        GenericIndexed.fromIterable(mergedDimensions, GenericIndexed.STRING_STRATEGY),
+        GenericIndexed.fromIterable(mergedMetrics, GenericIndexed.STRING_STRATEGY),
+        dataInterval,
+        indexSpec.getBitmapSerdeFactory()
     );
 
-    IndexIO.DefaultIndexIOHandler.convertV8toV9(v8OutDir, outDir);
+    IndexIO.DefaultIndexIOHandler.convertV8toV9(v8OutDir, outDir, indexSpec);
     FileUtils.deleteDirectory(v8OutDir);
 
     return outDir;
@@ -904,14 +978,13 @@ public class IndexMerger
       File inDir,
       GenericIndexed<String> availableDimensions,
       GenericIndexed<String> availableMetrics,
-      Interval dataInterval
+      Interval dataInterval,
+      BitmapSerdeFactory bitmapSerdeFactory
   ) throws IOException
   {
     File indexFile = new File(inDir, "index.drd");
 
-    FileChannel channel = null;
-    try {
-      channel = new FileOutputStream(indexFile).getChannel();
+    try (FileChannel channel = new FileOutputStream(indexFile).getChannel()) {
       channel.write(ByteBuffer.wrap(new byte[]{versionId}));
 
       availableDimensions.writeToChannel(channel);
@@ -922,10 +995,6 @@ public class IndexMerger
       serializerUtils.writeString(
           channel, mapper.writeValueAsString(bitmapSerdeFactory)
       );
-    }
-    finally {
-      CloseQuietly.close(channel);
-      channel = null;
     }
     IndexIO.checkFileSize(indexFile);
   }
@@ -1208,5 +1277,31 @@ public class IndexMerger
 
       return retVal;
     }
+  }
+
+  static boolean isNullColumn(Iterable<String> dimValues)
+  {
+    if (dimValues == null) {
+      return true;
+    }
+    for (String val : dimValues) {
+      if (val != null) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private static void writeMetadataToFile(File metadataFile, Map<String, Object> metadata) throws IOException
+  {
+    try (FileOutputStream metadataFileOutputStream = new FileOutputStream(metadataFile);
+         FileChannel metadataFilechannel = metadataFileOutputStream.getChannel()
+    ) {
+      byte[] metadataBytes = mapper.writeValueAsBytes(metadata);
+      if (metadataBytes.length != metadataFilechannel.write(ByteBuffer.wrap(metadataBytes))) {
+        throw new IOException("Failed to write metadata for file");
+      }
+    }
+    IndexIO.checkFileSize(metadataFile);
   }
 }

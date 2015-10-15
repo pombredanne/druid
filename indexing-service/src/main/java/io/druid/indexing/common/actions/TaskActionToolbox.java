@@ -1,20 +1,18 @@
 /*
  * Druid - a distributed column store.
- * Copyright (C) 2012, 2013  Metamarkets Group Inc.
+ * Copyright 2012 - 2015 Metamarkets Group Inc.
  *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 
 package io.druid.indexing.common.actions;
@@ -85,24 +83,19 @@ public class TaskActionToolbox
     return true;
   }
 
-  public void verifyTaskLocksAndSinglePartitionSettitude(
+  public void verifyTaskLocks(
       final Task task,
-      final Set<DataSegment> segments,
-      final boolean allowOlderVersions
+      final Set<DataSegment> segments
   )
   {
-    if (!taskLockCoversSegments(task, segments, allowOlderVersions)) {
+    if (!taskLockCoversSegments(task, segments)) {
       throw new ISE("Segments not covered by locks for task: %s", task.getId());
-    }
-    if (!segmentsAreFromSamePartitionSet(segments)) {
-      throw new ISE("Segments are not in the same partition set: %s", segments);
     }
   }
 
   public boolean taskLockCoversSegments(
       final Task task,
-      final Set<DataSegment> segments,
-      final boolean allowOlderVersions
+      final Set<DataSegment> segments
   )
   {
     // Verify that each of these segments falls under some lock
@@ -112,22 +105,18 @@ public class TaskActionToolbox
     // NOTE: insert some segments from the task but not others.
 
     final List<TaskLock> taskLocks = getTaskLockbox().findLocksForTask(task);
-    for(final DataSegment segment : segments) {
+    for (final DataSegment segment : segments) {
       final boolean ok = Iterables.any(
           taskLocks, new Predicate<TaskLock>()
-      {
-        @Override
-        public boolean apply(TaskLock taskLock)
-        {
-          final boolean versionOk = allowOlderVersions
-                                    ? taskLock.getVersion().compareTo(segment.getVersion()) >= 0
-                                    : taskLock.getVersion().equals(segment.getVersion());
-
-          return versionOk
-                 && taskLock.getDataSource().equals(segment.getDataSource())
-                 && taskLock.getInterval().contains(segment.getInterval());
-        }
-      }
+          {
+            @Override
+            public boolean apply(TaskLock taskLock)
+            {
+              return taskLock.getDataSource().equals(segment.getDataSource())
+                     && taskLock.getInterval().contains(segment.getInterval())
+                     && taskLock.getVersion().compareTo(segment.getVersion()) >= 0;
+            }
+          }
       );
 
       if (!ok) {
